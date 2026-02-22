@@ -1,0 +1,20 @@
+<div class="panic-container">
+  <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+    <select id="panic-type-filter">
+      <option value="all">All</option>
+      <option value="Actor">Actors</option>
+      <option value="Item">Items</option>
+      <option value="Scene">Scenes</option>
+      <option value="Journal">Journals</option>
+      <option value="RollTable">RollTables</option>
+      <option value="Macro">Macros</option>
+    </select>
+    <input
+      id="panic-search"
+      type="text"
+      placeholder="Search actors, items, journals, scenes..."
+      autofocus
+    />
+  </div>
+  <div id="panic-results"></div>
+</div>
