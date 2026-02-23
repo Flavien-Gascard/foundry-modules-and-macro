@@ -452,6 +452,40 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     { value: "Macro", label: "Macros" }
   ];
 
+  // --- Add Panic Sound List ---
+
+  const playlist = game.playlists?.getName("Panic Button");
+  let soundListHtml = "<div id='panic-sound-list' style='margin-bottom: 8px;'><strong>Panic Sounds:</strong> ";
+  if (playlist && playlist.sounds.size > 0) {
+    playlist.sounds.forEach(sound => {
+      soundListHtml += `<button class='panic-sound-btn' data-sound-id='${sound.id}' style='background: #222; color: #fff; border: 2px solid #c00; border-radius: 6px; padding: 2px 10px; margin: 2px; font-weight: bold;'>🔊 ${sound.name}</button>`;
+    });
+  } else {
+    soundListHtml += "<span style='color: rgba(255, 0, 0, 0.26);'>No sounds found in 'Panic Button' playlist.</span>";
+  }
+  soundListHtml += "</div>";
+  html.find(".window-content").prepend($(soundListHtml));
+
+  html.find(".panic-sound-btn").on("click", async function() {
+    const soundId = $(this).data("sound-id");
+    try {
+      const playlist = game.playlists?.getName("Panic Button");
+      if (playlist) {
+        const sound = playlist.sounds.get(soundId);
+        if (sound) {
+          await playlist.playSound(sound);
+          ui.notifications.info(`Sound '${sound.name}' played for all players!`);
+        } else {
+          ui.notifications.warn("Sound not found in playlist.");
+        }
+      } else {
+        ui.notifications.warn("Playlist 'Panic Button' not found.");
+      }
+    } catch (e) {
+      ui.notifications.error("Failed to play sound: " + e);
+    }
+  });
+
   function renderResults(list){
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
