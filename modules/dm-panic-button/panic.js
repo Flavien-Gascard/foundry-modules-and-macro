@@ -246,19 +246,31 @@ async function handleSpawnClick(event) {
 ================================================= */
 
 function startItemPlacement(entry) {
+  console.log("DM Panic Button: startItemPlacement called", entry);
   pendingSpawnEntry = entry;
   ui.notifications.info("Click on the map to place the item as loot.");
   canvas.stage.once("pointerdown", handleItemPlaceClick);
 }
 
 async function handleItemPlaceClick(event) {
-  if (!pendingSpawnEntry) return;
+  console.log("DM Panic Button: handleItemPlaceClick called", event);
+  if (!pendingSpawnEntry) {
+    console.warn("DM Panic Button: No pendingSpawnEntry in handleItemPlaceClick");
+    return;
+  }
   const scene = game.scenes.current;
-  if (!scene) return;
+  if (!scene) {
+    console.warn("DM Panic Button: No current scene in handleItemPlaceClick");
+    return;
+  }
   const item = pendingSpawnEntry.document;
-  if (!item) return;
-  // Debug log for item image
+  if (!item) {
+    console.warn("DM Panic Button: No item in pendingSpawnEntry");
+    return;
+  }
   console.log("DM Panic Button: Item image used for placement:", item.img);
+  console.log("DM Panic Button: handleItemPlaceClick item", item);
+  console.log("DM Panic Button: handleItemPlaceClick scene", scene);
 
   const world = canvas.stage.worldTransform.applyInverse(event.data.global);
   let snapped = { x: world.x, y: world.y };
@@ -268,114 +280,85 @@ async function handleItemPlaceClick(event) {
       const snapResult = canvas.grid.getSnappedPoint(snapArg);
       if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
         snapped = snapResult;
-      } else {
-        // fallback silently if snapResult is invalid
       }
     }
   } catch (err) {
-    // Only log if not a known harmless error
     if (!(err instanceof TypeError)) {
       console.error("DM Panic Button: getSnappedPoint failed", err);
     }
-    // fallback to unsnapped coordinates
   }
 
-  if (isItemPilesActive() && typeof game.itempiles !== "undefined" && game.itempiles.API) {
-    // Use the configurable icon from settings
-    // Use the default item pile image
-    const defaultIcon = "icons/svg/item-bag.svg";
-    // Generate a unique name for each pile
-    const uniqueName = `${item.name} (${Date.now()})`;
-    console.log("DM Panic Button: Item Piles API call (icon from settings, unique name)", {
-      scene: scene,
-      x: snapped.x,
-      y: snapped.y,
-      items: [item.toObject()],
-      actorData: {
-        name: uniqueName,
-        type: "loot",
-        img: forcedIcon
-      },
-      tokenData: {
-        name: uniqueName,
-        img: forcedIcon
-      },
-      pileData: {
-        enabled: true,
-        type: "loot",
-        name: uniqueName
+  // Convert spells to scrolls for loot placement
+  let lootItem = item;
+  if (item.type === "spell") {
+    // Create a scroll item from the spell
+    lootItem = await Item.create({
+      name: `Scroll of ${item.name}`,
+      type: "consumable",
+      img: item.img || "icons/commodities/paper/paper-script-spiral-tan.webp",
+      data: {
+        description: item.system?.description || item.data?.description || {},
+        consumableType: "scroll",
+        uses: { value: 1, max: 1, per: "charges" },
+        rarity: item.system?.rarity || item.data?.rarity || "common",
+        // Embed spell data if your system supports it
+        spell: item.toObject()
       }
-    });
-    const pileOptions = {
-      position: { x: snapped.x, y: snapped.y },
-      sceneId: scene.id,
-      items: [item.toObject()],
-      createActor: true,
-      actorOverrides: {
-        name: uniqueName,
-        img: forcedIcon,
-        type: "loot"
-      },
-      tokenOverrides: {
-        name: uniqueName,
-        img: forcedIcon,
-        'texture.src': forcedIcon,
-        actorLink: false,
-        disposition: 0,
-        scale: 1,
-        vision: false
-      },
-      itemPileFlags: {
-        enabled: true,
-        type: "loot",
-        name: uniqueName
+    }, { temporary: true });
+    console.log("DM Panic Button: Converted spell to scroll", lootItem);
+  }
+
+  const lootData = {
+    name: lootItem.name,
+    type: "npc",
+    img: lootItem.img,
+    flags: { "dm-panic-button": { loot: true } },
+    items: [lootItem.toObject()],
+    prototypeToken: {
+      name: lootItem.name,
+      img: lootItem.img,
+      actorLink: false,
+      disposition: 0,
+      scale: 1,
+      vision: false,
+      flags: { "dm-panic-button": { loot: true } }
+    }
+  };
+  console.log("DM Panic Button: Loot actor image:", lootItem.img);
+  const actor = await Actor.create(lootData);
+  if (!actor) {
+    ui.notifications.error("Failed to create loot actor.");
+    pendingSpawnEntry = null;
+    return;
+  }
+  const tokenDoc = await actor.getTokenDocument();
+  tokenDoc.updateSource({ x: snapped.x, y: snapped.y });
+  const createdTokens = await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
+  ui.notifications.info(`Loot '${lootItem.name}' placed.`);
+
+  // Control the newly placed token
+  if (createdTokens && createdTokens.length > 0) {
+    const placedToken = canvas.tokens.get(createdTokens[0].id);
+    if (placedToken) {
+      placedToken.control();
+      // Find macro by name
+      const macro = game.macros.getName("TurnToItemPile");
+      if (macro) {
+        macro.execute();
+        ui.notifications.info("Macro 'TurnToItemPile' executed on placed token.");
+      } else {
+        ui.notifications.warn("Macro 'TurnToItemPile' not found.");
       }
-    };
-    const result = await game.itempiles.API.createItemPile(pileOptions);
-    console.log("DM Panic Button: Item Piles API result", result);
-    if (!result) {
-      ui.notifications.error("Failed to create item pile.");
     } else {
-      ui.notifications.info(`Item Pile '${uniqueName}' placed.`);
-      pendingSpawnEntry = null;
-      return; // Prevent fallback logic from running
+      ui.notifications.warn("Placed token not found on canvas.");
     }
   } else {
-    // Fallback to simple loot actor
-    const lootData = {
-      name: item.name,
-      type: "npc",
-      img: item.img,
-      flags: { "dm-panic-button": { loot: true } },
-      items: [item.toObject()],
-      prototypeToken: {
-        name: item.name,
-        img: item.img,
-        actorLink: false,
-        disposition: 0,
-        scale: 1,
-        vision: false,
-        flags: { "dm-panic-button": { loot: true } }
-      }
-    };
-    console.log("DM Panic Button: Loot actor image:", item.img);
-    const actor = await Actor.create(lootData);
-    if (!actor) {
-      ui.notifications.error("Failed to create loot actor.");
-      pendingSpawnEntry = null;
-      return;
-    }
-    const tokenDoc = await actor.getTokenDocument();
-    tokenDoc.updateSource({ x: snapped.x, y: snapped.y });
-    await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
-    ui.notifications.info(`Loot '${item.name}' placed.`);
+    ui.notifications.warn("No token was created for item placement.");
   }
   pendingSpawnEntry = null;
 }
 
-function isItemPilesActive() {
-  return game.modules.get("item-piles")?.active;
-}
+
 
 
 /* =================================================
