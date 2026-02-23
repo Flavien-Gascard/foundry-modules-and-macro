@@ -1,3 +1,30 @@
+/* ================================
+   Type Filter Dropdown (Fantasy Pill)
+================================ */
+
+#panic-type-filter {
+  appearance: none;
+  background: linear-gradient(90deg, rgba(60,45,25,0.85) 0%, rgba(201,168,106,0.15) 100%);
+  color: var(--panic-text);
+  border: 2px solid var(--panic-accent);
+  border-radius: 999px;
+  padding: 6px 24px;
+  font-size: 1.05em;
+  font-family: inherit;
+  box-shadow: 0 0 8px var(--panic-glow), 0 2px 8px rgba(0,0,0,0.15);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+#panic-type-filter:focus {
+  border-color: #ffe7a0;
+  box-shadow: 0 0 12px var(--panic-accent);
+}
+
+#panic-type-filter option {
+  background: #2a1a0a;
+  color: var(--panic-text);
+}
 /* ================================================
    ARCANE THEME VARIABLES
 ================================================ */

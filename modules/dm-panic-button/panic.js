@@ -1,4 +1,3 @@
-
 /* =================================================
  * TOKEN HUD BUTTON (renderTokenHUD hook for Foundry v13)
 ================================================= */
@@ -56,6 +55,15 @@ export class DMPanicButton extends Application {
 
 Hooks.once("ready", () => {
   globalThis.DMPanicButton = DMPanicButton;
+  // Register configurable item pile icon setting
+  game.settings.register("dm-panic-button", "itemPileIcon", {
+    name: "Item Pile Icon URL",
+    hint: "URL or relative path for the icon used for item piles placed by the Panic Button. Example: modules/dm-panic-button/data/images/chest.png",
+    scope: "world",
+    config: true,
+    type: String,
+    default: "modules/dm-panic-button/data/images/chest.png"
+  });
 });
 
 
@@ -202,11 +210,19 @@ async function handleSpawnClick(event) {
   let snapped = { x: world.x, y: world.y };
   try {
     if (canvas?.grid?.getSnappedPoint) {
-      // Only pass x and y for Foundry v13 compatibility
-      snapped = canvas.grid.getSnappedPoint({ x: world.x, y: world.y }) || snapped;
+      const snapArg = { x: world.x, y: world.y };
+      const snapResult = canvas.grid.getSnappedPoint(snapArg);
+      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
+        snapped = snapResult;
+      } else {
+        // fallback silently if snapResult is invalid
+      }
     }
   } catch (err) {
-    console.error("DM Panic Button: getSnappedPoint failed", err);
+    // Only log if not a known harmless error
+    if (!(err instanceof TypeError)) {
+      console.error("DM Panic Button: getSnappedPoint failed", err);
+    }
     // fallback to unsnapped coordinates
   }
 
@@ -222,6 +238,143 @@ async function handleSpawnClick(event) {
   ui.notifications.info(`${actor.name} spawned.`);
 
   pendingSpawnEntry = null;
+}
+
+
+/* =================================================
+ * ITEM PLACEMENT (Loot Token)
+================================================= */
+
+function startItemPlacement(entry) {
+  pendingSpawnEntry = entry;
+  ui.notifications.info("Click on the map to place the item as loot.");
+  canvas.stage.once("pointerdown", handleItemPlaceClick);
+}
+
+async function handleItemPlaceClick(event) {
+  if (!pendingSpawnEntry) return;
+  const scene = game.scenes.current;
+  if (!scene) return;
+  const item = pendingSpawnEntry.document;
+  if (!item) return;
+  // Debug log for item image
+  console.log("DM Panic Button: Item image used for placement:", item.img);
+
+  const world = canvas.stage.worldTransform.applyInverse(event.data.global);
+  let snapped = { x: world.x, y: world.y };
+  try {
+    if (canvas?.grid?.getSnappedPoint) {
+      const snapArg = { x: world.x, y: world.y };
+      const snapResult = canvas.grid.getSnappedPoint(snapArg);
+      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
+        snapped = snapResult;
+      } else {
+        // fallback silently if snapResult is invalid
+      }
+    }
+  } catch (err) {
+    // Only log if not a known harmless error
+    if (!(err instanceof TypeError)) {
+      console.error("DM Panic Button: getSnappedPoint failed", err);
+    }
+    // fallback to unsnapped coordinates
+  }
+
+  if (isItemPilesActive() && typeof game.itempiles !== "undefined" && game.itempiles.API) {
+    // Use the configurable icon from settings
+    // Use the default item pile image
+    const defaultIcon = "icons/svg/item-bag.svg";
+    // Generate a unique name for each pile
+    const uniqueName = `${item.name} (${Date.now()})`;
+    console.log("DM Panic Button: Item Piles API call (icon from settings, unique name)", {
+      scene: scene,
+      x: snapped.x,
+      y: snapped.y,
+      items: [item.toObject()],
+      actorData: {
+        name: uniqueName,
+        type: "loot",
+        img: forcedIcon
+      },
+      tokenData: {
+        name: uniqueName,
+        img: forcedIcon
+      },
+      pileData: {
+        enabled: true,
+        type: "loot",
+        name: uniqueName
+      }
+    });
+    const pileOptions = {
+      position: { x: snapped.x, y: snapped.y },
+      sceneId: scene.id,
+      items: [item.toObject()],
+      createActor: true,
+      actorOverrides: {
+        name: uniqueName,
+        img: forcedIcon,
+        type: "loot"
+      },
+      tokenOverrides: {
+        name: uniqueName,
+        img: forcedIcon,
+        'texture.src': forcedIcon,
+        actorLink: false,
+        disposition: 0,
+        scale: 1,
+        vision: false
+      },
+      itemPileFlags: {
+        enabled: true,
+        type: "loot",
+        name: uniqueName
+      }
+    };
+    const result = await game.itempiles.API.createItemPile(pileOptions);
+    console.log("DM Panic Button: Item Piles API result", result);
+    if (!result) {
+      ui.notifications.error("Failed to create item pile.");
+    } else {
+      ui.notifications.info(`Item Pile '${uniqueName}' placed.`);
+      pendingSpawnEntry = null;
+      return; // Prevent fallback logic from running
+    }
+  } else {
+    // Fallback to simple loot actor
+    const lootData = {
+      name: item.name,
+      type: "npc",
+      img: item.img,
+      flags: { "dm-panic-button": { loot: true } },
+      items: [item.toObject()],
+      prototypeToken: {
+        name: item.name,
+        img: item.img,
+        actorLink: false,
+        disposition: 0,
+        scale: 1,
+        vision: false,
+        flags: { "dm-panic-button": { loot: true } }
+      }
+    };
+    console.log("DM Panic Button: Loot actor image:", item.img);
+    const actor = await Actor.create(lootData);
+    if (!actor) {
+      ui.notifications.error("Failed to create loot actor.");
+      pendingSpawnEntry = null;
+      return;
+    }
+    const tokenDoc = await actor.getTokenDocument();
+    tokenDoc.updateSource({ x: snapped.x, y: snapped.y });
+    await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
+    ui.notifications.info(`Loot '${item.name}' placed.`);
+  }
+  pendingSpawnEntry = null;
+}
+
+function isItemPilesActive() {
+  return game.modules.get("item-piles")?.active;
 }
 
 
@@ -258,6 +411,9 @@ async function runContextAction(action, entry) {
       startSpawnPlacement(entry);
       break;
 
+    case "place-item":
+      startItemPlacement(entry);
+      break;
 
 
     /* ---------- Item, Feature, Spell, Effect ---------- */
@@ -301,26 +457,25 @@ async function runContextAction(action, entry) {
 ================================================= */
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
-
   const input = html.find("#panic-search");
+  const typeFilter = html.find("#panic-type-filter");
   const resultsDiv = html.find("#panic-results");
-
+  const typeOptions = [
+    { value: "Actor", label: "Actors" },
+    { value: "Item", label: "Items" },
+    { value: "Scene", label: "Scenes" },
+    { value: "Journal", label: "Journals" },
+    { value: "RollTable", label: "RollTables" },
+    { value: "Macro", label: "Macros" }
+  ];
 
   function renderResults(list){
-
     resultsDiv.empty();
-
-
     const actorSelected = getSelectedActor();
-
     list.forEach(entry=>{
-      const isActive =
-        entry.type === "Scene" &&
-        entry.document.active;
-
-      // Allow Give for Items, Spells, Features, Effects
+      const isActive = entry.type === "Scene" && entry.document.active;
       const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
-
+      const canPlace = entry.type === "Item";
       const actions = `
         <div class="panic-actions">
           <button class="panic-btn" data-action="open">👁 Open</button>
@@ -337,11 +492,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           ${canGive
             ? `<button class="panic-btn" data-action="give-item">➕ Give</button>`
             : ""}
+          ${canPlace
+            ? `<button class="panic-btn" data-action="place-item">🪙 Place Item</button>`
+            : ""}
         </div>
       `;
-
-      const el=$(`
-        <div class="panic-result">
+      const el=$( 
+        `<div class="panic-result">
           <div class="panic-main">
             <strong>
               ${entry.name}
@@ -350,9 +507,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             <div class="panic-type">${entry.type}</div>
           </div>
           ${actions}
-        </div>
-      `);
-
+        </div>`
+      );
       el.find(".panic-btn").on("click", async ev=>{
         ev.stopPropagation();
         await runContextAction(
@@ -360,22 +516,53 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           entry
         );
       });
-
       resultsDiv.append(el);
     });
   }
 
-
-  input.on("input", ev=>{
-
-    const query = ev.target.value.trim();
-
+  function doSearch() {
+    const query = input.val().trim();
+    console.log("doSearch called", { query, typeFilter: typeFilter.val() }); // Debug log
     if(!query){
       resultsDiv.empty();
+      typeFilter.hide();
       return;
     }
+    let results = searchDocuments(query);
+    // Only update dropdown options if search input changed, not on dropdown change
+    if (document.activeElement === input[0]) {
+      const uniqueTypes = [...new Set(results.map(r => r.type))];
+      let optionsHtml = '<option value="all">All</option>';
+      const presentTypes = uniqueTypes;
+      typeOptions.forEach(opt => {
+        if (presentTypes.includes(opt.value)) {
+          optionsHtml += `<option value="${opt.value}">${opt.label}</option>`;
+        }
+      });
+      typeFilter.html(optionsHtml);
+      // Show/hide dropdown
+      if (presentTypes.length <= 1) {
+        typeFilter.hide();
+        if (presentTypes.length === 1) typeFilter.val(presentTypes[0]);
+      } else {
+        typeFilter.show();
+      }
+    }
+    const type = typeFilter.val();
+    console.log("Filtering results", { type, resultsCount: results.length }); // Debug log
+    if (type && type !== "all") {
+      results = results.filter(r => r.type === type);
+      console.log("Filtered results", results); // Debug log
+    }
+    renderResults(results);
+  }
 
-    renderResults(searchDocuments(query));
+  input.on("input", doSearch);
+  typeFilter.on("change", function() {
+    setTimeout(() => {
+      console.log("Dropdown changed", typeFilter.val()); // Debug log
+      doSearch();
+    }, 0);
   });
 
   setTimeout(()=>input.focus(),50);
