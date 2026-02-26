@@ -441,9 +441,9 @@ async function runContextAction(action, entry) {
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
   const input = html.find("#panic-search");
-  const typeFilter = html.find("#panic-type-filter");
   const resultsDiv = html.find("#panic-results");
   const typeOptions = [
+    { value: "all", label: "All" },
     { value: "Actor", label: "Actors" },
     { value: "Item", label: "Items" },
     { value: "Scene", label: "Scenes" },
@@ -452,39 +452,32 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     { value: "Macro", label: "Macros" }
   ];
 
-  // --- Add Panic Sound List ---
-
-  const playlist = game.playlists?.getName("Panic Button");
-  let soundListHtml = "<div id='panic-sound-list' style='margin-bottom: 8px;'><strong>Panic Sounds:</strong> ";
-  if (playlist && playlist.sounds.size > 0) {
-    playlist.sounds.forEach(sound => {
-      soundListHtml += `<button class='panic-sound-btn' data-sound-id='${sound.id}' style='background: #222; color: #fff; border: 2px solid #c00; border-radius: 6px; padding: 2px 10px; margin: 2px; font-weight: bold;'>🔊 ${sound.name}</button>`;
-    });
-  } else {
-    soundListHtml += "<span style='color: rgba(255, 0, 0, 0.26);'>No sounds found in 'Panic Button' playlist.</span>";
-  }
-  soundListHtml += "</div>";
-  html.find(".window-content").prepend($(soundListHtml));
-
-  html.find(".panic-sound-btn").on("click", async function() {
-    const soundId = $(this).data("sound-id");
-    try {
-      const playlist = game.playlists?.getName("Panic Button");
-      if (playlist) {
-        const sound = playlist.sounds.get(soundId);
-        if (sound) {
-          await playlist.playSound(sound);
-          ui.notifications.info(`Sound '${sound.name}' played for all players!`);
-        } else {
-          ui.notifications.warn("Sound not found in playlist.");
-        }
-      } else {
-        ui.notifications.warn("Playlist 'Panic Button' not found.");
-      }
-    } catch (e) {
-      ui.notifications.error("Failed to play sound: " + e);
-    }
+  // Insert category menu
+    let menuHtml = `<div id="panic-category-menu" style="margin-bottom: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
+  typeOptions.forEach(opt => {
+      menuHtml += `<button class="panic-category-btn" data-type="${opt.value}" style="background: #eee; border: 1px solid #bbb; border-radius: 16px; padding: 6px 0; font-weight: bold; cursor: pointer; width: 100%;">${opt.label}</button>`;
   });
+  menuHtml += `</div>`;
+  input.parent().before($(menuHtml));
+
+  let selectedType = "all";
+  function updateCategoryMenu() {
+    html.find(".panic-category-btn").each(function() {
+      const btn = $(this);
+      if (btn.data("type") === selectedType) {
+        btn.css({ background: "#c00", color: "#fff", borderColor: "#c00" });
+      } else {
+        btn.css({ background: "#eee", color: "#222", borderColor: "#bbb" });
+      }
+    });
+  }
+  html.find(".panic-category-btn").on("click", function() {
+    selectedType = $(this).data("type");
+    updateCategoryMenu();
+    doSearch();
+  });
+  updateCategoryMenu();
+
 
   function renderResults(list){
     resultsDiv.empty();
@@ -539,48 +532,19 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
 
   function doSearch() {
     const query = input.val().trim();
-    console.log("doSearch called", { query, typeFilter: typeFilter.val() }); // Debug log
     if(!query){
       resultsDiv.empty();
-      typeFilter.hide();
       return;
     }
     let results = searchDocuments(query);
-    // Only update dropdown options if search input changed, not on dropdown change
-    if (document.activeElement === input[0]) {
-      const uniqueTypes = [...new Set(results.map(r => r.type))];
-      let optionsHtml = '<option value="all">All</option>';
-      const presentTypes = uniqueTypes;
-      typeOptions.forEach(opt => {
-        if (presentTypes.includes(opt.value)) {
-          optionsHtml += `<option value="${opt.value}">${opt.label}</option>`;
-        }
-      });
-      typeFilter.html(optionsHtml);
-      // Show/hide dropdown
-      if (presentTypes.length <= 1) {
-        typeFilter.hide();
-        if (presentTypes.length === 1) typeFilter.val(presentTypes[0]);
-      } else {
-        typeFilter.show();
-      }
-    }
-    const type = typeFilter.val();
-    console.log("Filtering results", { type, resultsCount: results.length }); // Debug log
-    if (type && type !== "all") {
-      results = results.filter(r => r.type === type);
-      console.log("Filtered results", results); // Debug log
+    if (selectedType && selectedType !== "all") {
+      results = results.filter(r => r.type === selectedType);
     }
     renderResults(results);
   }
 
+  // Remove the old dropdown if present
+  html.find("#panic-type-filter").remove();
   input.on("input", doSearch);
-  typeFilter.on("change", function() {
-    setTimeout(() => {
-      console.log("Dropdown changed", typeFilter.val()); // Debug log
-      doSearch();
-    }, 0);
-  });
-
   setTimeout(()=>input.focus(),50);
 });
