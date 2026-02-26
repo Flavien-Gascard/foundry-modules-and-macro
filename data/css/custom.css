@@ -1,0 +1,65 @@
+/* ===== EOMANE JOURNAL STYLE ===== */
+
+.eomane {
+  background: radial-gradient(circle at center, #0a0a14 0%, #000 80%);
+  color: #ddd6ff;
+  padding: 12px;
+  font-family: "Signika", sans-serif;
+}
+
+/* headers */
+.eomane h1, .eomane h2, .eomane h3 {
+  color: #b89cff;
+  text-shadow: 0 0 8px rgba(160,120,255,.6);
+}
+
+/* navigation */
+.eomane-nav {
+  background: rgba(40,10,70,.35);
+  padding: 8px;
+  border: 1px solid #5b3aa8;
+  border-radius: 6px;
+}
+
+/* whisper text */
+.eomane-whisper {
+  font-style: italic;
+  color: #cbb8ff;
+  opacity: .9;
+  text-shadow: 0 0 6px rgba(180,140,255,.5);
+}
+
+/* GM collapsible */
+.eomane-gm summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: #ff9cf0;
+}
+
+.eomane-gm {
+  border-left: 3px solid #7a3cff;
+  padding-left: 8px;
+  margin: 8px 0;
+}
+
+/* round button */
+.round-btn {
+  display: inline-block;
+  padding: 4px 8px;
+  margin: 4px 0;
+  border: 1px solid #8f6cff;
+  border-radius: 4px;
+  background: rgba(90,40,160,.4);
+  color: white;
+  text-decoration: none;
+}
+
+.round-btn:hover {
+  background: rgba(130,70,220,.7);
+}
+
+/* back links */
+.back-link {
+  font-size: 0.9em;
+  opacity: .8;
+}

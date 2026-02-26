@@ -1,4 +1,3 @@
-
 /* =================================================
  * TOKEN HUD BUTTON (renderTokenHUD hook for Foundry v13)
 ================================================= */
@@ -56,6 +55,15 @@ export class DMPanicButton extends Application {
 
 Hooks.once("ready", () => {
   globalThis.DMPanicButton = DMPanicButton;
+  // Register configurable item pile icon setting
+  game.settings.register("dm-panic-button", "itemPileIcon", {
+    name: "Item Pile Icon URL",
+    hint: "URL or relative path for the icon used for item piles placed by the Panic Button. Example: modules/dm-panic-button/data/images/chest.png",
+    scope: "world",
+    config: true,
+    type: String,
+    default: "modules/dm-panic-button/data/images/chest.png"
+  });
 });
 
 
@@ -202,11 +210,19 @@ async function handleSpawnClick(event) {
   let snapped = { x: world.x, y: world.y };
   try {
     if (canvas?.grid?.getSnappedPoint) {
-      // Only pass x and y for Foundry v13 compatibility
-      snapped = canvas.grid.getSnappedPoint({ x: world.x, y: world.y }) || snapped;
+      const snapArg = { x: world.x, y: world.y };
+      const snapResult = canvas.grid.getSnappedPoint(snapArg);
+      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
+        snapped = snapResult;
+      } else {
+        // fallback silently if snapResult is invalid
+      }
     }
   } catch (err) {
-    console.error("DM Panic Button: getSnappedPoint failed", err);
+    // Only log if not a known harmless error
+    if (!(err instanceof TypeError)) {
+      console.error("DM Panic Button: getSnappedPoint failed", err);
+    }
     // fallback to unsnapped coordinates
   }
 
@@ -223,6 +239,126 @@ async function handleSpawnClick(event) {
 
   pendingSpawnEntry = null;
 }
+
+
+/* =================================================
+ * ITEM PLACEMENT (Loot Token)
+================================================= */
+
+function startItemPlacement(entry) {
+  console.log("DM Panic Button: startItemPlacement called", entry);
+  pendingSpawnEntry = entry;
+  ui.notifications.info("Click on the map to place the item as loot.");
+  canvas.stage.once("pointerdown", handleItemPlaceClick);
+}
+
+async function handleItemPlaceClick(event) {
+  console.log("DM Panic Button: handleItemPlaceClick called", event);
+  if (!pendingSpawnEntry) {
+    console.warn("DM Panic Button: No pendingSpawnEntry in handleItemPlaceClick");
+    return;
+  }
+  const scene = game.scenes.current;
+  if (!scene) {
+    console.warn("DM Panic Button: No current scene in handleItemPlaceClick");
+    return;
+  }
+  const item = pendingSpawnEntry.document;
+  if (!item) {
+    console.warn("DM Panic Button: No item in pendingSpawnEntry");
+    return;
+  }
+  console.log("DM Panic Button: Item image used for placement:", item.img);
+  console.log("DM Panic Button: handleItemPlaceClick item", item);
+  console.log("DM Panic Button: handleItemPlaceClick scene", scene);
+
+  const world = canvas.stage.worldTransform.applyInverse(event.data.global);
+  let snapped = { x: world.x, y: world.y };
+  try {
+    if (canvas?.grid?.getSnappedPoint) {
+      const snapArg = { x: world.x, y: world.y };
+      const snapResult = canvas.grid.getSnappedPoint(snapArg);
+      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
+        snapped = snapResult;
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof TypeError)) {
+      console.error("DM Panic Button: getSnappedPoint failed", err);
+    }
+  }
+
+  // Convert spells to scrolls for loot placement
+  let lootItem = item;
+  if (item.type === "spell") {
+    // Create a scroll item from the spell
+    lootItem = await Item.create({
+      name: `Scroll of ${item.name}`,
+      type: "consumable",
+      img: item.img || "icons/commodities/paper/paper-script-spiral-tan.webp",
+      data: {
+        description: item.system?.description || item.data?.description || {},
+        consumableType: "scroll",
+        uses: { value: 1, max: 1, per: "charges" },
+        rarity: item.system?.rarity || item.data?.rarity || "common",
+        // Embed spell data if your system supports it
+        spell: item.toObject()
+      }
+    }, { temporary: true });
+    console.log("DM Panic Button: Converted spell to scroll", lootItem);
+  }
+
+  const lootData = {
+    name: lootItem.name,
+    type: "npc",
+    img: lootItem.img,
+    flags: { "dm-panic-button": { loot: true } },
+    items: [lootItem.toObject()],
+    prototypeToken: {
+      name: lootItem.name,
+      img: lootItem.img,
+      actorLink: false,
+      disposition: 0,
+      scale: 1,
+      vision: false,
+      flags: { "dm-panic-button": { loot: true } }
+    }
+  };
+  console.log("DM Panic Button: Loot actor image:", lootItem.img);
+  const actor = await Actor.create(lootData);
+  if (!actor) {
+    ui.notifications.error("Failed to create loot actor.");
+    pendingSpawnEntry = null;
+    return;
+  }
+  const tokenDoc = await actor.getTokenDocument();
+  tokenDoc.updateSource({ x: snapped.x, y: snapped.y });
+  const createdTokens = await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
+  ui.notifications.info(`Loot '${lootItem.name}' placed.`);
+
+  // Control the newly placed token
+  if (createdTokens && createdTokens.length > 0) {
+    const placedToken = canvas.tokens.get(createdTokens[0].id);
+    if (placedToken) {
+      placedToken.control();
+      // Find macro by name
+      const macro = game.macros.getName("TurnToItemPile");
+      if (macro) {
+        macro.execute();
+        ui.notifications.info("Macro 'TurnToItemPile' executed on placed token.");
+      } else {
+        ui.notifications.warn("Macro 'TurnToItemPile' not found.");
+      }
+    } else {
+      ui.notifications.warn("Placed token not found on canvas.");
+    }
+  } else {
+    ui.notifications.warn("No token was created for item placement.");
+  }
+  pendingSpawnEntry = null;
+}
+
+
 
 
 /* =================================================
@@ -258,6 +394,9 @@ async function runContextAction(action, entry) {
       startSpawnPlacement(entry);
       break;
 
+    case "place-item":
+      startItemPlacement(entry);
+      break;
 
 
     /* ---------- Item, Feature, Spell, Effect ---------- */
@@ -301,26 +440,59 @@ async function runContextAction(action, entry) {
 ================================================= */
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
-
   const input = html.find("#panic-search");
+  const typeFilter = html.find("#panic-type-filter");
   const resultsDiv = html.find("#panic-results");
+  const typeOptions = [
+    { value: "Actor", label: "Actors" },
+    { value: "Item", label: "Items" },
+    { value: "Scene", label: "Scenes" },
+    { value: "Journal", label: "Journals" },
+    { value: "RollTable", label: "RollTables" },
+    { value: "Macro", label: "Macros" }
+  ];
 
+  // --- Add Panic Sound List ---
+
+  const playlist = game.playlists?.getName("Panic Button");
+  let soundListHtml = "<div id='panic-sound-list' style='margin-bottom: 8px;'><strong>Panic Sounds:</strong> ";
+  if (playlist && playlist.sounds.size > 0) {
+    playlist.sounds.forEach(sound => {
+      soundListHtml += `<button class='panic-sound-btn' data-sound-id='${sound.id}' style='background: #222; color: #fff; border: 2px solid #c00; border-radius: 6px; padding: 2px 10px; margin: 2px; font-weight: bold;'>🔊 ${sound.name}</button>`;
+    });
+  } else {
+    soundListHtml += "<span style='color: rgba(255, 0, 0, 0.26);'>No sounds found in 'Panic Button' playlist.</span>";
+  }
+  soundListHtml += "</div>";
+  html.find(".window-content").prepend($(soundListHtml));
+
+  html.find(".panic-sound-btn").on("click", async function() {
+    const soundId = $(this).data("sound-id");
+    try {
+      const playlist = game.playlists?.getName("Panic Button");
+      if (playlist) {
+        const sound = playlist.sounds.get(soundId);
+        if (sound) {
+          await playlist.playSound(sound);
+          ui.notifications.info(`Sound '${sound.name}' played for all players!`);
+        } else {
+          ui.notifications.warn("Sound not found in playlist.");
+        }
+      } else {
+        ui.notifications.warn("Playlist 'Panic Button' not found.");
+      }
+    } catch (e) {
+      ui.notifications.error("Failed to play sound: " + e);
+    }
+  });
 
   function renderResults(list){
-
     resultsDiv.empty();
-
-
     const actorSelected = getSelectedActor();
-
     list.forEach(entry=>{
-      const isActive =
-        entry.type === "Scene" &&
-        entry.document.active;
-
-      // Allow Give for Items, Spells, Features, Effects
+      const isActive = entry.type === "Scene" && entry.document.active;
       const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
-
+      const canPlace = entry.type === "Item";
       const actions = `
         <div class="panic-actions">
           <button class="panic-btn" data-action="open">👁 Open</button>
@@ -337,11 +509,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           ${canGive
             ? `<button class="panic-btn" data-action="give-item">➕ Give</button>`
             : ""}
+          ${canPlace
+            ? `<button class="panic-btn" data-action="place-item">🪙 Place Item</button>`
+            : ""}
         </div>
       `;
-
-      const el=$(`
-        <div class="panic-result">
+      const el=$( 
+        `<div class="panic-result">
           <div class="panic-main">
             <strong>
               ${entry.name}
@@ -350,9 +524,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             <div class="panic-type">${entry.type}</div>
           </div>
           ${actions}
-        </div>
-      `);
-
+        </div>`
+      );
       el.find(".panic-btn").on("click", async ev=>{
         ev.stopPropagation();
         await runContextAction(
@@ -360,22 +533,53 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           entry
         );
       });
-
       resultsDiv.append(el);
     });
   }
 
-
-  input.on("input", ev=>{
-
-    const query = ev.target.value.trim();
-
+  function doSearch() {
+    const query = input.val().trim();
+    console.log("doSearch called", { query, typeFilter: typeFilter.val() }); // Debug log
     if(!query){
       resultsDiv.empty();
+      typeFilter.hide();
       return;
     }
+    let results = searchDocuments(query);
+    // Only update dropdown options if search input changed, not on dropdown change
+    if (document.activeElement === input[0]) {
+      const uniqueTypes = [...new Set(results.map(r => r.type))];
+      let optionsHtml = '<option value="all">All</option>';
+      const presentTypes = uniqueTypes;
+      typeOptions.forEach(opt => {
+        if (presentTypes.includes(opt.value)) {
+          optionsHtml += `<option value="${opt.value}">${opt.label}</option>`;
+        }
+      });
+      typeFilter.html(optionsHtml);
+      // Show/hide dropdown
+      if (presentTypes.length <= 1) {
+        typeFilter.hide();
+        if (presentTypes.length === 1) typeFilter.val(presentTypes[0]);
+      } else {
+        typeFilter.show();
+      }
+    }
+    const type = typeFilter.val();
+    console.log("Filtering results", { type, resultsCount: results.length }); // Debug log
+    if (type && type !== "all") {
+      results = results.filter(r => r.type === type);
+      console.log("Filtered results", results); // Debug log
+    }
+    renderResults(results);
+  }
 
-    renderResults(searchDocuments(query));
+  input.on("input", doSearch);
+  typeFilter.on("change", function() {
+    setTimeout(() => {
+      console.log("Dropdown changed", typeFilter.val()); // Debug log
+      doSearch();
+    }, 0);
   });
 
   setTimeout(()=>input.focus(),50);
