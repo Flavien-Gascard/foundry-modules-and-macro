@@ -9,11 +9,9 @@
   gap: 8px;
 }
 
-.panic-item-subtype-btn,
-.panic-item-subsubtype-btn,
-.panic-pill {
-  background: linear-gradient(135deg, #232526 0%, #414345 100%);
-  border: 2.5px solid #bfa046;
+.panic-pill, .panic-item-subtype-btn, .panic-item-subsubtype-btn, .panic-category-btn, .panic-subtype-btn {
+  background: linear-gradient(135deg, #5a3c1a 0%, #2d1a07 100%);
+  border: 2.5px solid #ffd700;
   border-radius: 18px;
   padding: 8px 0;
   font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif;
@@ -27,22 +25,14 @@
   letter-spacing: 1px;
   transition: all 0.15s ease;
 }
-.panic-item-subtype-btn.selected,
-.panic-item-subsubtype-btn.selected {
-  background: rgba(255, 5, 5, 0.6);
+.panic-pill.selected, .panic-item-subtype-btn.selected, .panic-item-subsubtype-btn.selected, .panic-category-btn.selected, .panic-subtype-btn.selected {
+  background: linear-gradient(135deg, #8b5c2a 0%, #3d220a 100%);
   color: #fff;
-  border-color: rgb(255, 0, 0);
-}
-.panic-item-subsubtype-btn.selected {
-  background: rgba(5, 100, 255, 0.6);
-  color: #fff;
-  border-color: rgb(0, 100, 255);
-}
-.panic-item-subtype-btn:hover,
-.panic-item-subsubtype-btn:hover,
-.panic-pill:hover {
-  filter: brightness(1.15);
   border-color: #ffd700;
+}
+.panic-pill:hover, .panic-item-subtype-btn:hover, .panic-item-subsubtype-btn:hover, .panic-category-btn:hover, .panic-subtype-btn:hover {
+  filter: brightness(1.15);
+  border-color: #fffbe0;
 }
 /* ================================================
    ARCANE THEME VARIABLES

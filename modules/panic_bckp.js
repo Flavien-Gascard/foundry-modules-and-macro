@@ -453,31 +453,33 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   ];
 
   // Insert category menu
-    let menuHtml = `<div id="panic-category-menu" class="panic-category-menu" style="margin-bottom: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">`;
+    let menuHtml = `<div id="panic-category-menu" class="panic-category-menu" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px;">`;
     typeOptions.forEach(opt => {
       menuHtml += `<button class="panic-category-btn panic-pill" data-type="${opt.value}" style="
         background: linear-gradient(135deg, #232526 0%, #414345 100%);
-        border: 2.5px solid #bfa046;
-        border-radius: 18px;
-        padding: 8px 0;
+        border: 1.5px solid #bfa046;
+        border-radius: 12px;
+        padding: 3px 12px;
         font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif;
-        font-size: 1.08em;
+        font-size: 0.98em;
         font-weight: bold;
         color: #e7d7a1;
-        text-shadow: 0 0 6px #bfa046, 0 0 2px #000;
-        box-shadow: 0 2px 8px #000a;
+        text-shadow: 0 0 4px #bfa046, 0 0 1px #000;
+        box-shadow: 0 1px 4px #000a;
         cursor: pointer;
-        width: 100%;
-        letter-spacing: 1px;">
+        width: auto;
+        min-width: 0;
+        letter-spacing: 0.5px;">
         ${opt.label}</button>`;
     });
     menuHtml += `</div>`;
     input.parent().before($(menuHtml));
+    // Always insert a horizontal line between filters and search bar
+    html.find('#panic-type-search-hr').remove();
+    html.find('#panic-category-menu').after('<hr id="panic-type-search-hr" style="border:0;border-top:1.5px solid #bfa046;margin:8px 0 4px 0;">');
 
   let selectedType = "all";
   let selectedItemSubtype = "all";
-  let selectedItemSubSubtype = "all";
-  let showItemSubtypeMenu = true;
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
       const btn = $(this);
@@ -487,11 +489,35 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         btn.css({ background: "#eee", color: "#222", borderColor: "#bbb" });
       }
     });
+
+    // Remove old subtype menu
+    html.find("#panic-subtype-menu").remove();
+    // Show subtype pills if Item selected
+    if (selectedType === "Item") {
+      // Get all unique item types (e.g., weapon, armor, consumable, tool, loot, container)
+      let allItems = game.items.contents;
+      let subtypes = [...new Set(allItems.map(i => i.type || i.system?.type?.value || ""))].filter(Boolean);
+      if (subtypes.length) {
+        let subtypeHtml = `<div id="panic-subtype-menu" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px;">`;
+        const pillStyle = `background: linear-gradient(135deg, #232526 0%, #414345 100%); border: 1.5px solid #bfa046; border-radius: 12px; padding: 3px 12px; font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif; font-size: 0.98em; font-weight: bold; color: #e7d7a1; text-shadow: 0 0 4px #bfa046, 0 0 1px #000; box-shadow: 0 1px 4px #000a; cursor: pointer; width: auto; min-width: 0; letter-spacing: 0.5px;`;
+        subtypeHtml += `<button class="panic-subtype-btn panic-pill" data-subtype="all" style="${pillStyle} background:#eee;color:#222;border:1.5px solid #bbb;">All</button>`;
+        subtypes.forEach(st => {
+          subtypeHtml += `<button class="panic-subtype-btn panic-pill" data-subtype="${st}" style="${pillStyle}">${st}</button>`;
+        });
+        subtypeHtml += `</div>`;
+        html.find("#panic-type-search-hr").after($(subtypeHtml));
+        html.find(".panic-subtype-btn").on("click", function() {
+          selectedItemSubtype = $(this).data("subtype");
+          updateCategoryMenu();
+          doSearch();
+        });
+        html.find(`.panic-subtype-btn[data-subtype='${selectedItemSubtype}']`).css({ background: "#c00", color: "#fff", borderColor: "#c00" });
+      }
+    }
   }
   html.find(".panic-category-btn").on("click", function() {
     selectedType = $(this).data("type");
     selectedItemSubtype = "all";
-    selectedItemSubSubtype = "all";
     updateCategoryMenu();
     doSearch();
   });
@@ -502,9 +528,30 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
     list.forEach(entry=>{
-      const isActive = entry.type === "Scene" && entry.document.active;
-      const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
-      const canPlace = entry.type === "Item";
+          const isActive = entry.type === "Scene" && entry.document.active;
+          const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
+          const canPlace = entry.type === "Item";
+      let detailsHtml = "";
+      if (entry.type === "Item") {
+        const doc = entry.document;
+        const img = doc.img || "icons/svg/item-bag.svg";
+            const type = doc.type || doc.system?.type?.value || "";
+            const subtype = doc.system?.type?.value || "";
+            const rarity = doc.system?.rarity || "";
+            const attunement = doc.system?.attunement === "required" ? "Requires Attunement" : "";
+            let desc = doc.system?.description?.value || doc.data?.description?.value || "";
+            desc = desc.replace(/<[^>]+>/g, "").slice(0, 120) + (desc.length > 120 ? "..." : "");
+            detailsHtml = `
+              <div class="panic-item-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
+                <img src="${img}" alt="item" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:1.1em;font-weight:bold;">${entry.name}</div>
+                  <div style="font-size:0.95em;color:#bfa046;">${type}${subtype && subtype !== type ? ` (${subtype})` : ""}${rarity ? ` | ${rarity}` : ""}${attunement ? ` | ${attunement}` : ""}</div>
+                  <div style="font-size:0.93em;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${desc}</div>
+                </div>
+              </div>
+            `;
+      }
       const actions = `
         <div class="panic-actions">
           <button class="panic-btn" data-action="open">👁 Open</button>
@@ -528,13 +575,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       `;
       const el=$( 
         `<div class="panic-result">
-          <div class="panic-main">
+          ${detailsHtml || `<div class="panic-main">
             <strong>
               ${entry.name}
               ${isActive ? " ⭐" : ""}
             </strong>
             <div class="panic-type">${entry.type}</div>
-          </div>
+          </div>`}
           ${actions}
         </div>`
       );
@@ -559,6 +606,11 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       const addAll = (collection, type) => {
         collection.contents.forEach(doc => {
           if (!doc?.name) return;
+          // If Item, filter by subtype if set
+          if (type === "Item" && selectedType === "Item" && selectedItemSubtype !== "all") {
+            let docType = doc.type || doc.system?.type?.value || "";
+            if (docType !== selectedItemSubtype) return;
+          }
           results.push({
             name: doc.name,
             type,
@@ -591,6 +643,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       results = searchDocuments(query);
       if (selectedType && selectedType !== "all") {
         results = results.filter(r => r.type === selectedType);
+      }
+      // If Item, filter by subtype if set
+      if (selectedType === "Item" && selectedItemSubtype !== "all") {
+        results = results.filter(r => {
+          let docType = r.document.type || r.document.system?.type?.value || "";
+          return docType === selectedItemSubtype;
+        });
       }
     }
     renderResults(results);
