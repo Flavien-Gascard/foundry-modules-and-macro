@@ -1,3 +1,49 @@
+/* ================================
+   Subtype & Sub-Subtype Menus
+================================ */
+.panic-item-subtype-menu,
+.panic-item-subsubtype-menu {
+  margin-bottom: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.panic-item-subtype-btn,
+.panic-item-subsubtype-btn,
+.panic-pill {
+  background: linear-gradient(135deg, #232526 0%, #414345 100%);
+  border: 2.5px solid #bfa046;
+  border-radius: 18px;
+  padding: 8px 0;
+  font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif;
+  font-size: 1.08em;
+  font-weight: bold;
+  color: #e7d7a1;
+  text-shadow: 0 0 6px #bfa046, 0 0 2px #000;
+  box-shadow: 0 2px 8px #000a;
+  cursor: pointer;
+  width: 100%;
+  letter-spacing: 1px;
+  transition: all 0.15s ease;
+}
+.panic-item-subtype-btn.selected,
+.panic-item-subsubtype-btn.selected {
+  background: rgba(255, 5, 5, 0.6);
+  color: #fff;
+  border-color: rgb(255, 0, 0);
+}
+.panic-item-subsubtype-btn.selected {
+  background: rgba(5, 100, 255, 0.6);
+  color: #fff;
+  border-color: rgb(0, 100, 255);
+}
+.panic-item-subtype-btn:hover,
+.panic-item-subsubtype-btn:hover,
+.panic-pill:hover {
+  filter: brightness(1.15);
+  border-color: #ffd700;
+}
 /* ================================================
    ARCANE THEME VARIABLES
 ================================================ */
