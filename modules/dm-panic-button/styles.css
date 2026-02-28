@@ -9,30 +9,32 @@
   gap: 8px;
 }
 
-.panic-pill, .panic-item-subtype-btn, .panic-item-subsubtype-btn, .panic-category-btn, .panic-subtype-btn {
-  background: linear-gradient(135deg, #5a3c1a 0%, #2d1a07 100%);
-  border: 2.5px solid #ffd700;
-  border-radius: 18px;
-  padding: 8px 0;
-  font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif;
-  font-size: 1.08em;
-  font-weight: bold;
-  color: #e7d7a1;
-  text-shadow: 0 0 6px #bfa046, 0 0 2px #000;
-  box-shadow: 0 2px 8px #000a;
-  cursor: pointer;
-  width: 100%;
-  letter-spacing: 1px;
-  transition: all 0.15s ease;
+button.panic-pill, .panic-pill, .panic-category-btn, .panic-subtype-btn, .panic-item-subtype-btn, .panic-item-subsubtype-btn {
+  background: linear-gradient(135deg, #5a3c1a 0%, #2d1a07 100%) !important;
+  border: 1px solid #000000 !important;
+  border-radius: 10px !important;
+  padding: 3px 10px !important;
+  font-family: 'Papyrus', 'IM Fell English', 'Cinzel Decorative', serif !important;
+  font-size: 0.98em !important;
+  font-weight: bold !important;
+  color: #e7d7a1 !important;
+  text-shadow: 0 0 6px #bfa046, 0 0 2px #000 !important;
+  box-shadow: 0 1px 4px #000a !important;
+  cursor: pointer !important;
+  width: auto !important;
+  min-width: 0 !important;
+  letter-spacing: 0.5px !important;
+  transition: all 0.15s ease !important;
+  margin: 2px 4px !important;
 }
-.panic-pill.selected, .panic-item-subtype-btn.selected, .panic-item-subsubtype-btn.selected, .panic-category-btn.selected, .panic-subtype-btn.selected {
-  background: linear-gradient(135deg, #8b5c2a 0%, #3d220a 100%);
-  color: #fff;
-  border-color: #ffd700;
+button.panic-pill.selected, .panic-pill.selected, .panic-category-btn.selected, .panic-subtype-btn.selected, .panic-item-subtype-btn.selected, .panic-item-subsubtype-btn.selected {
+  background: linear-gradient(135deg, #8b5c2a 0%, #3d220a 100%) !important;
+  color: #fff !important;
+  border-color: #ffd700 !important;
 }
-.panic-pill:hover, .panic-item-subtype-btn:hover, .panic-item-subsubtype-btn:hover, .panic-category-btn:hover, .panic-subtype-btn:hover {
-  filter: brightness(1.15);
-  border-color: #fffbe0;
+button.panic-pill:hover, .panic-pill:hover, .panic-category-btn:hover, .panic-subtype-btn:hover, .panic-item-subtype-btn:hover, .panic-item-subsubtype-btn:hover {
+  filter: brightness(1.15) !important;
+  border-color: #fffbe0 !important;
 }
 /* ================================================
    ARCANE THEME VARIABLES
