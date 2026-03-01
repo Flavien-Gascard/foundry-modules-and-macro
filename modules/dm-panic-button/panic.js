@@ -889,6 +889,62 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         }
       }
 
+      // Show sub-subtype pills if "loot" is selected (for gear, art, gem, etc.)
+      if (selectedItemSubtype === "loot") {
+        let lootItems = allItems.filter(i => i.type === "loot");
+        let lootTypes = [...new Set(lootItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (lootTypes.length) {
+          let lootTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          lootTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          lootTypes.forEach(lt => {
+            const label = getSubSubtypeLabel("Item", "loot", lt);
+            lootTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${lt}">${label}</button>`;
+          });
+          lootTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(lootTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedLootType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedLootType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedLootType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+
+      // Show sub-subtype pills if "container" is selected (for bag, backpack, etc.)
+      if (selectedItemSubtype === "container") {
+        let containerItems = allItems.filter(i => i.type === "container");
+        let containerTypes = [...new Set(containerItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (containerTypes.length) {
+          let containerTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          containerTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          containerTypes.forEach(ct => {
+            const label = getSubSubtypeLabel("Item", "container", ct);
+            containerTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ct}">${label}</button>`;
+          });
+          containerTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(containerTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedContainerType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedContainerType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedContainerType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+
       // Show sub-subtype pills if "spell" is selected (for spell level and school)
       if (selectedItemSubtype === "spell") {
         let spellItems = allItems.filter(i => i.type === "spell");
@@ -1284,8 +1340,25 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             }
           }
           
+          // Loot-specific
+          if (type === "loot") {
+            // Loot type label
+            const lootType = sys.type?.value;
+            const lootLabels = { gear: "Adventuring Gear", art: "Art Object", gem: "Gemstone", material: "Material", resource: "Resource", junk: "Junk", treasure: "Treasure" };
+            if (lootType && lootLabels[lootType]) {
+              detailParts.unshift(lootLabels[lootType]);
+            }
+          }
+          
           // Container-specific: capacity
           if (type === "container") {
+            // Container type label
+            const containerType = sys.type?.value;
+            const containerLabels = { backpack: "Backpack", bag: "Bag", pouch: "Pouch", chest: "Chest", basket: "Basket", sack: "Sack", case: "Case", quiver: "Quiver", holster: "Holster" };
+            if (containerType && containerLabels[containerType]) {
+              detailParts.unshift(containerLabels[containerType]);
+            }
+            
             const capacity = sys.capacity;
             if (capacity?.value) {
               detailParts.push(`Capacity: ${capacity.value} ${capacity.type || "items"}`);
@@ -1466,6 +1539,16 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             let toolType = doc.system?.type?.value || "";
             if (toolType !== selectedItemSubSubtype) return;
           }
+          // If loot, filter by sub-subtype (gear, art, gem, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "loot" && selectedItemSubSubtype !== "all") {
+            let lootType = doc.system?.type?.value || "";
+            if (lootType !== selectedItemSubSubtype) return;
+          }
+          // If container, filter by sub-subtype (backpack, bag, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "container" && selectedItemSubSubtype !== "all") {
+            let containerType = doc.system?.type?.value || "";
+            if (containerType !== selectedItemSubSubtype) return;
+          }
           // If spell, filter by level and/or school
           if (type === "Item" && selectedItemSubtype === "spell") {
             if (selectedItemSubSubtype !== "all") {
@@ -1554,6 +1637,20 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         results = results.filter(r => {
           let toolType = r.document.system?.type?.value || "";
           return toolType === selectedItemSubSubtype;
+        });
+      }
+      // If loot, filter by sub-subtype if set
+      if (selectedItemSubtype === "loot" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let lootType = r.document.system?.type?.value || "";
+          return lootType === selectedItemSubSubtype;
+        });
+      }
+      // If container, filter by sub-subtype if set
+      if (selectedItemSubtype === "container" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let containerType = r.document.system?.type?.value || "";
+          return containerType === selectedItemSubSubtype;
         });
       }
       // If spell, filter by level and/or school

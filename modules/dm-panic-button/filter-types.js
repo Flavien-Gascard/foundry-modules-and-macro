@@ -70,6 +70,26 @@ export const FILTER_CONFIG = {
         music: "Musical Instrument",
         vehicle: "Vehicle"
       },
+      loot: {
+        gear: "Adventuring Gear",
+        art: "Art Object",
+        gem: "Gemstone",
+        material: "Material",
+        resource: "Resource",
+        junk: "Junk",
+        treasure: "Treasure"
+      },
+      container: {
+        backpack: "Backpack",
+        bag: "Bag",
+        pouch: "Pouch",
+        chest: "Chest",
+        basket: "Basket",
+        sack: "Sack",
+        case: "Case",
+        quiver: "Quiver",
+        holster: "Holster"
+      },
       spell: {
         // Spell levels - key matches system.level value
         0: "0",
