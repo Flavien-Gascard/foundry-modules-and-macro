@@ -1,10 +1,3 @@
-import { FILTER_CONFIG, getSubSubtypeLabel, getSubSubtypeOptions, isNoPlacement } from './filter-types.js';
-
-// Helper to get spell school labels
-function getSpellSchoolLabel(schoolCode) {
-  return FILTER_CONFIG.Item?.spellSchools?.[schoolCode] || schoolCode;
-}
-
 /**
  * Returns a Foundry VTT dnd5e item data template.
  * @param {Object} overrides - Properties to override in the template.
@@ -87,7 +80,7 @@ export class DMPanicButton extends Application {
       id: "dm-panic-button",
       title: "DM Panic Button",
       template: "modules/dm-panic-button/panic.html",
-      width: 720,
+      width: 520,
       height: 650,
       popOut: true,
       resizable: true
@@ -535,8 +528,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           text-shadow: 0 0 4px #bfa046, 0 0 1px #000 !important;
           box-shadow: 0 1px 4px #000a !important;
           cursor: pointer !important;
-          white-space: nowrap !important;
-          flex-shrink: 0 !important;
+          width: auto !important;
+          min-width: 0 !important;
           letter-spacing: 0.5px !important;
           margin-bottom: 0 !important;
         }
@@ -582,8 +575,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
 
   let selectedType = "all";
   let selectedItemSubtype = "all";
-  let selectedItemSubSubtype = "all"; // Third-tier filter (e.g., martialM, martialR, natural, spell level)
-  let selectedSpellSchool = "all"; // Fourth-tier filter for spell school
+  let selectedItemSubSubtype = "all"; // Third-tier filter (e.g., martialM, martialR, natural)
 
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
@@ -620,7 +612,6 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             selectedItemSubtype = clickedSubtype;
           }
           selectedItemSubSubtype = "all"; // Reset sub-subtype when subtype changes
-          selectedSpellSchool = "all"; // Reset spell school when subtype changes
           updateCategoryMenu();
           doSearch();
         });
@@ -636,8 +627,17 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           let subSubtypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
           subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All</button>`;
           subSubtypes.forEach(sst => {
-            // Get friendly label from filter-types config
-            const label = getSubSubtypeLabel("Item", "weapon", sst);
+            // Friendly labels for weapon subtypes
+            const labels = {
+              "simpleM": "Simple Melee",
+              "simpleR": "Simple Ranged",
+              "martialM": "Martial Melee",
+              "martialR": "Martial Ranged",
+              "natural": "Natural",
+              "improv": "Improvised",
+              "siege": "Siege"
+            };
+            const label = labels[sst] || sst;
             subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${sst}">${label}</button>`;
           });
           subSubtypeHtml += `</div>`;
@@ -657,105 +657,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
         }
       }
-
-      // Show sub-subtype pills if "spell" is selected (for spell level and school)
-      if (selectedItemSubtype === "spell") {
-        let spellItems = allItems.filter(i => i.type === "spell");
-        
-        // Spell Level row
-        let spellLevels = [...new Set(spellItems.map(i => i.system?.level))].filter(l => l !== undefined).sort((a,b) => a - b);
-        if (spellLevels.length) {
-          let levelHtml = `<div id="panic-spelllevel-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          levelHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Levels</button>`;
-          spellLevels.forEach(lvl => {
-            const label = getSubSubtypeLabel("Item", "spell", lvl);
-            levelHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${lvl}">${label}</button>`;
-          });
-          levelHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(levelHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedLevel = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedLevel) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedLevel;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-        
-        // Spell School row (add a new container for it)
-        let spellSchools = [...new Set(spellItems.map(i => i.system?.school || ""))].filter(Boolean).sort();
-        if (spellSchools.length) {
-          // Add school container if not present
-          if (!html.find("#panic-spellschool-container").length) {
-            html.find("#panic-subsubtype-container").after('<div id="panic-spellschool-container"></div>');
-          }
-          let schoolHtml = `<div id="panic-spellschool-menu" class="panic-item-spellschool-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto; margin-top: 6px;">`;
-          schoolHtml += `<button class="panic-spellschool-btn panic-pill" data-school="all">All Schools</button>`;
-          spellSchools.forEach(sch => {
-            const label = getSpellSchoolLabel(sch);
-            schoolHtml += `<button class="panic-spellschool-btn panic-pill" data-school="${sch}">${label}</button>`;
-          });
-          schoolHtml += `</div>`;
-          html.find("#panic-spellschool-container").html(schoolHtml);
-          html.find(".panic-spellschool-btn").on("click", function() {
-            const clickedSchool = $(this).data("school");
-            if (selectedSpellSchool === clickedSchool) {
-              selectedSpellSchool = "all";
-            } else {
-              selectedSpellSchool = clickedSchool;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-spellschool-btn').removeClass('selected');
-          html.find(`.panic-spellschool-btn[data-school='${selectedSpellSchool}']`).addClass('selected');
-        }
-      } else {
-        // Clear spell school container if not spell
-        html.find("#panic-spellschool-container").empty();
-      }
     }
-    
-    // Resize window to fit filter content
-    resizeToFitFilters();
-  }
-
-  // Resize the window width based on filter rows content
-  function resizeToFitFilters() {
-    // Wait a tick for DOM to update
-    setTimeout(() => {
-      const filterContainer = html.find("#panic-filter-container")[0];
-      if (!filterContainer) return;
-      
-      // Measure each filter row's natural width
-      const rows = filterContainer.querySelectorAll('[id$="-menu"]');
-      let maxWidth = 400; // minimum width
-      
-      rows.forEach(row => {
-        // scrollWidth gives the full content width even if overflow is hidden/auto
-        const rowWidth = row.scrollWidth + 40; // add padding for container margins
-        if (rowWidth > maxWidth) maxWidth = rowWidth;
-      });
-      
-      // Also check spell school container
-      const schoolContainer = html.find("#panic-spellschool-container [id$='-menu']")[0];
-      if (schoolContainer) {
-        const schoolWidth = schoolContainer.scrollWidth + 40;
-        if (schoolWidth > maxWidth) maxWidth = schoolWidth;
-      }
-      
-      // Cap at reasonable max and add window chrome padding
-      maxWidth = Math.min(maxWidth + 50, 1200);
-      maxWidth = Math.max(maxWidth, 500);
-      
-      // Get current position and resize
-      app.setPosition({ width: maxWidth });
-    }, 10);
   }
 
   html.find(".panic-category-btn").on("click", function() {
@@ -765,12 +667,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       selectedType = "all";
       selectedItemSubtype = "all";
       selectedItemSubSubtype = "all";
-      selectedSpellSchool = "all";
     } else {
       selectedType = clickedType;
       selectedItemSubtype = "all";
       selectedItemSubSubtype = "all";
-      selectedSpellSchool = "all";
     }
     updateCategoryMenu();
     doSearch();
@@ -786,11 +686,11 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
       
       // Determine if item can be placed as loot
-      // Check filter-types config for noPlacement rules
+      // Natural weapons cannot be placed (they're part of a creature, not loot)
       let canPlace = entry.type === "Item";
       if (canPlace && entry.document.type === "weapon") {
         const weaponCategory = entry.document.system?.type?.value || "";
-        if (isNoPlacement("Item", weaponCategory)) {
+        if (weaponCategory === "natural") {
           canPlace = false;
         }
       }
@@ -803,25 +703,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         const subtype = doc.system?.type?.value || "";
         const rarity = doc.system?.rarity || "";
         const attunement = doc.system?.attunement === "required" ? "Requires Attunement" : "";
-        
-        detailsHtml = `
-          <div class="panic-item-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
-            <img src="${img}" alt="item" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
-            <div style="flex:1;min-width:0;">
-              <div class="panic-desc-toggle" style="font-size:1.1em;font-weight:bold;cursor:pointer;user-select:none;" title="Click to expand description">
-                <span class="panic-arrow" style="color:#bfa046;font-size:0.7em;margin-right:4px;">▶</span>${entry.name}
-              </div>
-              <div style="font-size:0.95em;color:#bfa046;">${type}${subtype && subtype !== type ? ` (${subtype})` : ""}${rarity ? ` | ${rarity}` : ""}${attunement ? ` | ${attunement}` : ""}</div>
-            </div>
-          </div>
-        `;
-      }
-      
-      // Build description HTML (for items only, placed after actions)
-      let descHtml = "";
-      if (entry.type === "Item") {
-        const doc = entry.document;
         let desc = doc.system?.description?.value || doc.data?.description?.value || "";
+        
+        // Enrich description HTML so roll macros work
         let enrichedDesc = desc;
         try {
           const enrichContext = {
@@ -829,10 +713,21 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             relativeTo: doc
           };
           enrichedDesc = await TextEditor.enrichHTML(desc, enrichContext);
-        } catch (err) {}
-        descHtml = `<div class="panic-item-desc" style="font-size:0.93em;color:#bbb;display:none;margin-top:6px;padding-left:48px;border-top:1px solid #444;padding-top:6px;">${enrichedDesc}</div>`;
+        } catch (err) {
+          console.warn("DM Panic Button: Failed to enrich item description", err);
+        }
+        
+        detailsHtml = `
+          <div class="panic-item-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
+            <img src="${img}" alt="item" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:1.1em;font-weight:bold;">${entry.name}</div>
+              <div style="font-size:0.95em;color:#bfa046;">${type}${subtype && subtype !== type ? ` (${subtype})` : ""}${rarity ? ` | ${rarity}` : ""}${attunement ? ` | ${attunement}` : ""}</div>
+              <div class="panic-item-desc" style="font-size:0.93em;color:#bbb;">${enrichedDesc}</div>
+            </div>
+          </div>
+        `;
       }
-      
       const actions = `
         <div class="panic-actions">
           <button class="panic-btn panic-pill" data-action="open">👁 Open</button>
@@ -864,7 +759,6 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             <div class="panic-type">${entry.type}</div>
           </div>`}
           ${actions}
-          ${descHtml}
         </div>`
       );
       el.find(".panic-btn").on("click", async ev=>{
@@ -873,20 +767,6 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           ev.currentTarget.dataset.action,
           entry
         );
-      });
-      // Toggle description collapse/expand (clicking the title)
-      el.find(".panic-desc-toggle").on("click", function(ev) {
-        ev.stopPropagation();
-        const titleDiv = $(this);
-        const arrow = titleDiv.find(".panic-arrow");
-        const descDiv = titleDiv.closest(".panic-result").find(".panic-item-desc");
-        if (descDiv.is(":visible")) {
-          descDiv.slideUp(150);
-          arrow.text("▶");
-        } else {
-          descDiv.slideDown(150);
-          arrow.text("▼");
-        }
       });
       resultsDiv.append(el);
     }
@@ -911,17 +791,6 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           if (type === "Item" && selectedItemSubtype === "weapon" && selectedItemSubSubtype !== "all") {
             let weaponCategory = doc.system?.type?.value || "";
             if (weaponCategory !== selectedItemSubSubtype) return;
-          }
-          // If spell, filter by level and/or school
-          if (type === "Item" && selectedItemSubtype === "spell") {
-            if (selectedItemSubSubtype !== "all") {
-              let spellLevel = doc.system?.level;
-              if (String(spellLevel) !== String(selectedItemSubSubtype)) return;
-            }
-            if (selectedSpellSchool !== "all") {
-              let spellSchool = doc.system?.school || "";
-              if (spellSchool !== selectedSpellSchool) return;
-            }
           }
           results.push({
             name: doc.name,
@@ -969,21 +838,6 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           let weaponCategory = r.document.system?.type?.value || "";
           return weaponCategory === selectedItemSubSubtype;
         });
-      }
-      // If spell, filter by level and/or school
-      if (selectedItemSubtype === "spell") {
-        if (selectedItemSubSubtype !== "all") {
-          results = results.filter(r => {
-            let spellLevel = r.document.system?.level;
-            return String(spellLevel) === String(selectedItemSubSubtype);
-          });
-        }
-        if (selectedSpellSchool !== "all") {
-          results = results.filter(r => {
-            let spellSchool = r.document.system?.school || "";
-            return spellSchool === selectedSpellSchool;
-          });
-        }
       }
     }
     await renderResults(results);
