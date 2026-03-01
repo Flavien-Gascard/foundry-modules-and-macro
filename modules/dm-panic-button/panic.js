@@ -1,8 +1,121 @@
 import { FILTER_CONFIG, getSubSubtypeLabel, getSubSubtypeOptions, isNoPlacement } from './filter-types.js';
 
+// Module-level map: spell identifier/name → array of class identifiers
+let spellClassMap = null;
+let spellClassMapLoading = false;
+
 // Helper to get spell school labels
 function getSpellSchoolLabel(schoolCode) {
   return FILTER_CONFIG.Item?.spellSchools?.[schoolCode] || schoolCode;
+}
+
+// Helper to get spell class labels
+function getSpellClassLabel(classCode) {
+  return FILTER_CONFIG.Item?.spellClasses?.[classCode] || classCode;
+}
+
+/**
+ * Builds the spell-class mapping from CONFIG.DND5E.SPELL_LISTS
+ * Each spell list is a journal page with system.identifier (class name) and system.spells (Set of UUIDs)
+ */
+async function buildSpellClassMap() {
+  if (spellClassMap || spellClassMapLoading) return spellClassMap;
+  spellClassMapLoading = true;
+  
+  const map = new Map(); // key: spell identifier or name, value: Set of class identifiers
+  
+  // Only include these core classes (skip subclass/racial/etc spell lists)
+  const knownClasses = new Set(Object.keys(FILTER_CONFIG.Item?.spellClasses || {}));
+  
+  try {
+    const spellListUuids = CONFIG.DND5E?.SPELL_LISTS || [];
+    
+    // First pass: load all class spell list pages in parallel
+    const pages = await Promise.all(
+      spellListUuids.map(uuid => fromUuid(uuid).catch(() => null))
+    );
+    
+    // Collect all unique spell UUIDs and their class associations
+    const spellToClasses = new Map(); // spellUuid -> Set of classIds
+    
+    for (const page of pages) {
+      if (!page?.system?.identifier || !page.system.spells) continue;
+      if (page.system.type !== "class") continue;
+      
+      const classId = page.system.identifier.toLowerCase();
+      if (!knownClasses.has(classId)) continue;
+      
+      for (const spellUuid of page.system.spells) {
+        if (!spellToClasses.has(spellUuid)) {
+          spellToClasses.set(spellUuid, new Set());
+        }
+        spellToClasses.get(spellUuid).add(classId);
+      }
+    }
+    
+    // Second pass: load all spells in parallel batches (50 at a time to avoid overwhelming)
+    const spellUuids = [...spellToClasses.keys()];
+    const BATCH_SIZE = 50;
+    
+    for (let i = 0; i < spellUuids.length; i += BATCH_SIZE) {
+      const batch = spellUuids.slice(i, i + BATCH_SIZE);
+      const spells = await Promise.all(
+        batch.map(uuid => fromUuid(uuid).catch(() => null))
+      );
+      
+      for (let j = 0; j < spells.length; j++) {
+        const spell = spells[j];
+        const spellUuid = batch[j];
+        const classIds = spellToClasses.get(spellUuid);
+        
+        if (!spell || !classIds) continue;
+        
+        // Use identifier as primary key, name as fallback
+        const key = (spell.system?.identifier || spell.name || "").toLowerCase();
+        if (key) {
+          if (!map.has(key)) map.set(key, new Set());
+          classIds.forEach(c => map.get(key).add(c));
+        }
+        
+        // Also add by name for matching world items that might not have identifier
+        const nameKey = spell.name?.toLowerCase();
+        if (nameKey && nameKey !== key) {
+          if (!map.has(nameKey)) map.set(nameKey, new Set());
+          classIds.forEach(c => map.get(nameKey).add(c));
+        }
+      }
+    }
+    
+    spellClassMap = map;
+    console.log(`DM Panic Button: Loaded spell-class mappings for ${map.size} spells`);
+  } catch (e) {
+    console.error("DM Panic Button: Failed to build spell class map", e);
+    spellClassMap = new Map();
+  }
+  
+  spellClassMapLoading = false;
+  return spellClassMap;
+}
+
+// Helper to get spell's class associations using the pre-built map
+function getSpellClasses(doc) {
+  if (!spellClassMap) return [];
+  
+  // Try identifier first, then name
+  const identifier = (doc.system?.identifier || "").toLowerCase();
+  const name = (doc.name || "").toLowerCase();
+  
+  const classes = new Set();
+  
+  if (identifier && spellClassMap.has(identifier)) {
+    spellClassMap.get(identifier).forEach(c => classes.add(c));
+  }
+  
+  if (name && spellClassMap.has(name)) {
+    spellClassMap.get(name).forEach(c => classes.add(c));
+  }
+  
+  return [...classes];
 }
 
 /**
@@ -95,8 +208,12 @@ export class DMPanicButton extends Application {
   }
 }
 
-Hooks.once("ready", () => {
+Hooks.once("ready", async () => {
   globalThis.DMPanicButton = DMPanicButton;
+  
+  // Build spell-class mapping from CONFIG.DND5E.SPELL_LISTS
+  await buildSpellClassMap();
+  
   // Register configurable item pile icon setting
   game.settings.register("dm-panic-button", "itemPileIcon", {
     name: "Item Pile Icon URL",
@@ -584,6 +701,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   let selectedItemSubtype = "all";
   let selectedItemSubSubtype = "all"; // Third-tier filter (e.g., martialM, martialR, natural, spell level)
   let selectedSpellSchool = "all"; // Fourth-tier filter for spell school
+  let selectedSpellClass = "all"; // Fifth-tier filter for spell class
 
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
@@ -621,6 +739,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           }
           selectedItemSubSubtype = "all"; // Reset sub-subtype when subtype changes
           selectedSpellSchool = "all"; // Reset spell school when subtype changes
+          selectedSpellClass = "all"; // Reset spell class when subtype changes
           updateCategoryMenu();
           doSearch();
         });
@@ -649,6 +768,118 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
               selectedItemSubSubtype = "all";
             } else {
               selectedItemSubSubtype = clickedSubSubtype;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+      
+      // Show sub-subtype pills if "feat" is selected (for class, monster, race, feat, etc.)
+      if (selectedItemSubtype === "feat") {
+        let featItems = allItems.filter(i => i.type === "feat");
+        let featTypes = [...new Set(featItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (featTypes.length) {
+          let featTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          featTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          featTypes.forEach(ft => {
+            const label = getSubSubtypeLabel("Item", "feat", ft);
+            featTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ft}">${label}</button>`;
+          });
+          featTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(featTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedFeatType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedFeatType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedFeatType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+      
+      // Show sub-subtype pills if "consumable" is selected (for potion, poison, scroll, etc.)
+      if (selectedItemSubtype === "consumable") {
+        let consumableItems = allItems.filter(i => i.type === "consumable");
+        let consumableTypes = [...new Set(consumableItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (consumableTypes.length) {
+          let consumableTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          consumableTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          consumableTypes.forEach(ct => {
+            const label = getSubSubtypeLabel("Item", "consumable", ct);
+            consumableTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ct}">${label}</button>`;
+          });
+          consumableTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(consumableTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedConsumableType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedConsumableType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedConsumableType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+      
+      // Show sub-subtype pills if "equipment" is selected (for ring, wondrous, armor, etc.)
+      if (selectedItemSubtype === "equipment") {
+        let equipmentItems = allItems.filter(i => i.type === "equipment");
+        let equipmentTypes = [...new Set(equipmentItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (equipmentTypes.length) {
+          let equipmentTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          equipmentTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          equipmentTypes.forEach(et => {
+            const label = getSubSubtypeLabel("Item", "equipment", et);
+            equipmentTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${et}">${label}</button>`;
+          });
+          equipmentTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(equipmentTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedEquipmentType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedEquipmentType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedEquipmentType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
+      
+      // Show sub-subtype pills if "tool" is selected (for artisan, gaming, musical, vehicle)
+      if (selectedItemSubtype === "tool") {
+        let toolItems = allItems.filter(i => i.type === "tool");
+        let toolTypes = [...new Set(toolItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (toolTypes.length) {
+          let toolTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          toolTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
+          toolTypes.forEach(tt => {
+            const label = getSubSubtypeLabel("Item", "tool", tt);
+            toolTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${tt}">${label}</button>`;
+          });
+          toolTypeHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(toolTypeHtml);
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedToolType = $(this).data("subsubtype");
+            if (selectedItemSubSubtype === clickedToolType) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedToolType;
             }
             updateCategoryMenu();
             doSearch();
@@ -715,9 +946,62 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           html.find('.panic-spellschool-btn').removeClass('selected');
           html.find(`.panic-spellschool-btn[data-school='${selectedSpellSchool}']`).addClass('selected');
         }
+        
+        // Spell Class row (add a new container for it)
+        // Add class container if not present
+        if (!html.find("#panic-spellclass-container").length) {
+          html.find("#panic-spellschool-container").after('<div id="panic-spellclass-container"></div>');
+        }
+        
+        // Check if spell class map is still loading
+        if (spellClassMapLoading || !spellClassMap) {
+          html.find("#panic-spellclass-container").html(
+            `<div id="panic-spellclass-menu" class="panic-item-spellclass-menu" style="display: flex; gap: 5px; margin-top: 6px;">
+              <span class="panic-pill" style="opacity: 0.6;"><i class="fas fa-spinner fa-spin"></i> Loading classes...</span>
+            </div>`
+          );
+          // Re-check when map might be ready
+          if (spellClassMapLoading) {
+            setTimeout(() => {
+              if (selectedItemSubtype === "spell") updateCategoryMenu();
+            }, 500);
+          }
+        } else {
+          // Gather all classes that have spells in the world
+          let allSpellClasses = new Set();
+          spellItems.forEach(spell => {
+            getSpellClasses(spell).forEach(cls => allSpellClasses.add(cls));
+          });
+          let spellClassList = [...allSpellClasses].sort();
+          if (spellClassList.length) {
+            let classHtml = `<div id="panic-spellclass-menu" class="panic-item-spellclass-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto; margin-top: 6px;">`;
+            classHtml += `<button class="panic-spellclass-btn panic-pill" data-class="all">All Classes</button>`;
+            spellClassList.forEach(cls => {
+              const label = getSpellClassLabel(cls);
+              classHtml += `<button class="panic-spellclass-btn panic-pill" data-class="${cls}">${label}</button>`;
+            });
+            classHtml += `</div>`;
+            html.find("#panic-spellclass-container").html(classHtml);
+            html.find(".panic-spellclass-btn").on("click", function() {
+              const clickedClass = $(this).data("class");
+              if (selectedSpellClass === clickedClass) {
+                selectedSpellClass = "all";
+              } else {
+                selectedSpellClass = clickedClass;
+              }
+              updateCategoryMenu();
+              doSearch();
+            });
+            html.find('.panic-spellclass-btn').removeClass('selected');
+            html.find(`.panic-spellclass-btn[data-class='${selectedSpellClass}']`).addClass('selected');
+          } else {
+            html.find("#panic-spellclass-container").empty();
+          }
+        }
       } else {
-        // Clear spell school container if not spell
+        // Clear spell school and class containers if not spell
         html.find("#panic-spellschool-container").empty();
+        html.find("#panic-spellclass-container").empty();
       }
     }
     
@@ -749,6 +1033,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         if (schoolWidth > maxWidth) maxWidth = schoolWidth;
       }
       
+      // Also check spell class container
+      const classContainer = html.find("#panic-spellclass-container [id$='-menu']")[0];
+      if (classContainer) {
+        const classWidth = classContainer.scrollWidth + 40;
+        if (classWidth > maxWidth) maxWidth = classWidth;
+      }
+      
       // Cap at reasonable max and add window chrome padding
       maxWidth = Math.min(maxWidth + 50, 1200);
       maxWidth = Math.max(maxWidth, 500);
@@ -766,11 +1057,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       selectedItemSubtype = "all";
       selectedItemSubSubtype = "all";
       selectedSpellSchool = "all";
+      selectedSpellClass = "all";
     } else {
       selectedType = clickedType;
       selectedItemSubtype = "all";
       selectedItemSubSubtype = "all";
       selectedSpellSchool = "all";
+      selectedSpellClass = "all";
     }
     updateCategoryMenu();
     doSearch();
@@ -788,6 +1081,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       // Determine if item can be placed as loot
       // Check filter-types config for noPlacement rules
       let canPlace = entry.type === "Item";
+      // Feats and spells can't be placed as loot
+      if (canPlace && ["feat", "spell", "class", "subclass", "background", "race"].includes(entry.document.type)) {
+        canPlace = false;
+      }
       if (canPlace && entry.document.type === "weapon") {
         const weaponCategory = entry.document.system?.type?.value || "";
         if (isNoPlacement("Item", weaponCategory)) {
@@ -804,6 +1101,241 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         const rarity = doc.system?.rarity || "";
         const attunement = doc.system?.attunement === "required" ? "Requires Attunement" : "";
         
+        // Build spell-specific details
+        let spellDetails = "";
+        if (type === "spell") {
+          const sys = doc.system || {};
+          const level = sys.level === 0 ? "Cantrip" : `Level ${sys.level}`;
+          const school = getSpellSchoolLabel(sys.school || "");
+          
+          // Activation/casting time
+          const activation = sys.activation || {};
+          let castTime = "";
+          if (activation.type) {
+            const actValue = activation.value || 1;
+            const actType = activation.type;
+            const actTypes = { action: "Action", bonus: "Bonus Action", reaction: "Reaction", minute: "Minute", hour: "Hour" };
+            castTime = `${actValue > 1 ? actValue + " " : ""}${actTypes[actType] || actType}${actValue > 1 && actType !== "action" && actType !== "bonus" && actType !== "reaction" ? "s" : ""}`;
+          }
+          
+          // Range
+          const range = sys.range || {};
+          let rangeStr = "";
+          if (range.units === "self") rangeStr = "Self";
+          else if (range.units === "touch") rangeStr = "Touch";
+          else if (range.value) rangeStr = `${range.value} ${range.units || "ft"}`;
+          
+          // Duration
+          const duration = sys.duration || {};
+          let durationStr = "";
+          if (duration.units === "inst") durationStr = "Instantaneous";
+          else if (duration.units === "perm") durationStr = "Permanent";
+          else if (duration.units === "spec") durationStr = "Special";
+          else if (duration.value) {
+            const durUnits = { minute: "min", hour: "hr", day: "day", round: "rd", turn: "turn" };
+            durationStr = `${duration.value} ${durUnits[duration.units] || duration.units}${duration.value > 1 ? "s" : ""}`;
+            if (duration.concentration) durationStr = `Conc. ${durationStr}`;
+          } else if (duration.concentration) durationStr = "Concentration";
+          
+          // Components
+          const props = sys.properties || new Set();
+          let components = [];
+          if (props.has?.("vocal") || props.includes?.("vocal")) components.push("V");
+          if (props.has?.("somatic") || props.includes?.("somatic")) components.push("S");
+          if (props.has?.("material") || props.includes?.("material")) components.push("M");
+          const compStr = components.join(", ");
+          
+          // Build details line
+          const details = [level, school, castTime, rangeStr, durationStr, compStr].filter(Boolean);
+          spellDetails = `<div style="font-size:0.9em;color:#8cb4d9;margin-top:2px;">${details.join(" | ")}</div>`;
+        }
+        
+        // Build item-specific details (non-spell)
+        let itemDetails = "";
+        if (type !== "spell") {
+          const sys = doc.system || {};
+          let detailParts = [];
+          
+          // Weight (handle both object {value, units} and number formats)
+          const weightObj = sys.weight;
+          const weight = typeof weightObj === 'object' ? weightObj?.value : weightObj;
+          if (weight) detailParts.push(`${weight} lb`);
+          
+          // Price (format large numbers with commas)
+          const price = sys.price;
+          if (price?.value) {
+            const formattedPrice = price.value.toLocaleString();
+            detailParts.push(`${formattedPrice} ${price.denomination || "gp"}`);
+          }
+          
+          // Weapon-specific: damage, properties
+          if (type === "weapon") {
+            // Damage
+            const damage = sys.damage?.base || sys.damage;
+            if (damage?.number && damage?.denomination) {
+              let dmgStr = `${damage.number}d${damage.denomination}`;
+              const dmgTypes = { bludgeoning: "bludg.", piercing: "pierc.", slashing: "slash.", fire: "fire", cold: "cold", lightning: "light.", thunder: "thund.", acid: "acid", poison: "poison", necrotic: "necro.", radiant: "radiant", force: "force", psychic: "psych." };
+              if (damage.types?.length) {
+                dmgStr += ` ${damage.types.map(t => dmgTypes[t] || t).join("/")}`;
+              }
+              detailParts.unshift(dmgStr); // Put damage first
+            }
+            
+            // Weapon properties
+            const props = sys.properties || new Set();
+            const propLabels = [];
+            const propMap = { fin: "Finesse", hvy: "Heavy", lgt: "Light", rch: "Reach", thr: "Thrown", two: "Two-Handed", ver: "Versatile", amm: "Ammunition", lod: "Loading" };
+            for (const [key, label] of Object.entries(propMap)) {
+              if (props.has?.(key) || props.includes?.(key) || props[key]) propLabels.push(label);
+            }
+            if (propLabels.length) detailParts.push(propLabels.join(", "));
+            
+            // Range for ranged/thrown
+            const range = sys.range;
+            if (range?.value) {
+              let rangeStr = `${range.value}`;
+              if (range.long) rangeStr += `/${range.long}`;
+              rangeStr += " ft";
+              detailParts.push(rangeStr);
+            }
+          }
+          
+          // Armor/Equipment-specific: AC, stealth
+          if (type === "equipment") {
+            // Equipment type label
+            const equipType = sys.type?.value;
+            const equipLabels = { ring: "Ring", wondrous: "Wondrous", rod: "Rod", wand: "Wand", staff: "Staff", amulet: "Amulet", belt: "Belt", boots: "Boots", bracers: "Bracers", cloak: "Cloak", gloves: "Gloves", hat: "Hat", helm: "Helm", light: "Light Armor", medium: "Medium Armor", heavy: "Heavy Armor", shield: "Shield", clothing: "Clothing", trinket: "Trinket", vehicle: "Vehicle" };
+            if (equipType && equipLabels[equipType]) {
+              detailParts.unshift(equipLabels[equipType]);
+            }
+            
+            const armor = sys.armor;
+            if (armor?.value) {
+              let acStr = `AC ${armor.value}`;
+              if (armor.dex !== null && armor.dex !== undefined) {
+                if (armor.dex === 0) acStr += " (no Dex)";
+                else if (armor.dex < 10) acStr += ` (+${armor.dex} Dex max)`;
+              }
+              detailParts.push(acStr);
+            }
+            
+            // Stealth disadvantage
+            const props = sys.properties || new Set();
+            if (props.has?.("stealthDisadvantage") || props.stealthDisadvantage) {
+              detailParts.push("Stealth Disadv.");
+            }
+            
+            // Magical property
+            if (props.has?.("mgc") || props.includes?.("mgc") || (Array.isArray(props) && props.includes("mgc"))) {
+              detailParts.push("Magical");
+            }
+            
+            // Strength requirement
+            if (sys.strength) detailParts.push(`Str ${sys.strength}`);
+            
+            // Uses/Charges with recovery
+            const uses = sys.uses;
+            if (uses?.max) {
+              const spent = uses.spent || 0;
+              const max = typeof uses.max === 'string' ? parseInt(uses.max) || uses.max : uses.max;
+              const remaining = typeof max === 'number' ? max - spent : uses.max;
+              let useStr = `${remaining}/${max} charges`;
+              // Recovery method
+              if (uses.recovery?.length) {
+                const recovery = uses.recovery[0];
+                const recTypes = { sr: "SR", lr: "LR", dawn: "Dawn", dusk: "Dusk", day: "Day" };
+                if (recovery.period && recTypes[recovery.period]) {
+                  useStr += ` (${recTypes[recovery.period]})`;
+                }
+              }
+              detailParts.push(useStr);
+            }
+          }
+          
+          // Consumable-specific: uses
+          if (type === "consumable") {
+            const uses = sys.uses;
+            if (uses?.max) {
+              const spent = uses.spent || 0;
+              const remaining = uses.max - spent;
+              detailParts.push(`${remaining}/${uses.max} uses`);
+            }
+            // Consumable subtype
+            const consumableType = sys.type?.value;
+            const consumableLabels = { potion: "Potion", poison: "Poison", food: "Food", scroll: "Scroll", wand: "Wand", rod: "Rod", trinket: "Trinket" };
+            if (consumableType && consumableLabels[consumableType]) {
+              detailParts.unshift(consumableLabels[consumableType]);
+            }
+          }
+          
+          // Tool-specific
+          if (type === "tool") {
+            // Tool type label
+            const toolType = sys.type?.value;
+            const toolLabels = { art: "Artisan's Tools", game: "Gaming Set", music: "Musical Instrument", vehicle: "Vehicle" };
+            if (toolType && toolLabels[toolType]) {
+              detailParts.unshift(toolLabels[toolType]);
+            }
+            
+            const ability = sys.ability;
+            const abilityLabels = { str: "Str", dex: "Dex", con: "Con", int: "Int", wis: "Wis", cha: "Cha" };
+            if (ability && abilityLabels[ability]) {
+              detailParts.push(abilityLabels[ability]);
+            }
+          }
+          
+          // Container-specific: capacity
+          if (type === "container") {
+            const capacity = sys.capacity;
+            if (capacity?.value) {
+              detailParts.push(`Capacity: ${capacity.value} ${capacity.type || "items"}`);
+            }
+          }
+          
+          // Feat-specific details
+          if (type === "feat") {
+            // Feat category (class, origin, general, epic boon, fighting style, etc.)
+            const featType = sys.type?.value;
+            const featLabels = { class: "Class Feature", monster: "Monster Feature", race: "Species Feature", background: "Background Feature", feat: "Feat", origin: "Origin Feat", general: "General Feat", fighting: "Fighting Style", fightingStyle: "Fighting Style", metamagic: "Metamagic", eldritchInvocation: "Eldritch Invocation", pact: "Pact Boon", maneuver: "Maneuver", artificerInfusion: "Artificer Infusion", rune: "Rune", supernaturalGift: "Supernatural Gift", epicBoon: "Epic Boon" };
+            if (featType && featLabels[featType]) {
+              detailParts.unshift(featLabels[featType]);
+            }
+            
+            // Prerequisites
+            const prereqs = sys.prerequisites?.value || sys.requirements;
+            if (prereqs) detailParts.push(`Prereq: ${prereqs}`);
+            
+            // Activation (if active feat)
+            const activation = sys.activation || {};
+            if (activation.type && activation.type !== "none") {
+              const actTypes = { action: "Action", bonus: "Bonus Action", reaction: "Reaction", minute: "Minute", hour: "Hour", special: "Special" };
+              const actLabel = actTypes[activation.type] || activation.type;
+              detailParts.push(actLabel);
+            }
+            
+            // Uses (if limited)
+            const uses = sys.uses;
+            if (uses?.max) {
+              const spent = uses.spent || 0;
+              const remaining = uses.max - spent;
+              let useStr = `${remaining}/${uses.max} uses`;
+              // Recovery method
+              if (uses.recovery?.length) {
+                const recovery = uses.recovery[0];
+                const recTypes = { sr: "SR", lr: "LR", dawn: "Dawn", dusk: "Dusk" };
+                if (recovery.period && recTypes[recovery.period]) {
+                  useStr += ` (${recTypes[recovery.period]})`;
+                }
+              }
+              detailParts.push(useStr);
+            }
+          }
+          
+          if (detailParts.length) {
+            itemDetails = `<div style="font-size:0.9em;color:#8cb4d9;margin-top:2px;">${detailParts.join(" | ")}</div>`;
+          }
+        }
+        
         detailsHtml = `
           <div class="panic-item-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
             <img src="${img}" alt="item" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
@@ -812,6 +1344,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
                 <span class="panic-arrow" style="color:#bfa046;font-size:0.7em;margin-right:4px;">▶</span>${entry.name}
               </div>
               <div style="font-size:0.95em;color:#bfa046;">${type}${subtype && subtype !== type ? ` (${subtype})` : ""}${rarity ? ` | ${rarity}` : ""}${attunement ? ` | ${attunement}` : ""}</div>
+              ${spellDetails}
+              ${itemDetails}
             </div>
           </div>
         `;
@@ -912,6 +1446,26 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             let weaponCategory = doc.system?.type?.value || "";
             if (weaponCategory !== selectedItemSubSubtype) return;
           }
+          // If feat, filter by sub-subtype (class, monster, race, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "feat" && selectedItemSubSubtype !== "all") {
+            let featType = doc.system?.type?.value || "";
+            if (featType !== selectedItemSubSubtype) return;
+          }
+          // If consumable, filter by sub-subtype (potion, poison, scroll, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "consumable" && selectedItemSubSubtype !== "all") {
+            let consumableType = doc.system?.type?.value || "";
+            if (consumableType !== selectedItemSubSubtype) return;
+          }
+          // If equipment, filter by sub-subtype (ring, wondrous, armor, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "equipment" && selectedItemSubSubtype !== "all") {
+            let equipmentType = doc.system?.type?.value || "";
+            if (equipmentType !== selectedItemSubSubtype) return;
+          }
+          // If tool, filter by sub-subtype (art, game, music, vehicle) if set
+          if (type === "Item" && selectedItemSubtype === "tool" && selectedItemSubSubtype !== "all") {
+            let toolType = doc.system?.type?.value || "";
+            if (toolType !== selectedItemSubSubtype) return;
+          }
           // If spell, filter by level and/or school
           if (type === "Item" && selectedItemSubtype === "spell") {
             if (selectedItemSubSubtype !== "all") {
@@ -921,6 +1475,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             if (selectedSpellSchool !== "all") {
               let spellSchool = doc.system?.school || "";
               if (spellSchool !== selectedSpellSchool) return;
+            }
+            if (selectedSpellClass !== "all") {
+              let spellClasses = getSpellClasses(doc);
+              if (!spellClasses.includes(selectedSpellClass)) return;
             }
           }
           results.push({
@@ -970,6 +1528,34 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           return weaponCategory === selectedItemSubSubtype;
         });
       }
+      // If feat, filter by sub-subtype if set
+      if (selectedItemSubtype === "feat" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let featType = r.document.system?.type?.value || "";
+          return featType === selectedItemSubSubtype;
+        });
+      }
+      // If consumable, filter by sub-subtype if set
+      if (selectedItemSubtype === "consumable" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let consumableType = r.document.system?.type?.value || "";
+          return consumableType === selectedItemSubSubtype;
+        });
+      }
+      // If equipment, filter by sub-subtype if set
+      if (selectedItemSubtype === "equipment" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let equipmentType = r.document.system?.type?.value || "";
+          return equipmentType === selectedItemSubSubtype;
+        });
+      }
+      // If tool, filter by sub-subtype if set
+      if (selectedItemSubtype === "tool" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let toolType = r.document.system?.type?.value || "";
+          return toolType === selectedItemSubSubtype;
+        });
+      }
       // If spell, filter by level and/or school
       if (selectedItemSubtype === "spell") {
         if (selectedItemSubSubtype !== "all") {
@@ -982,6 +1568,12 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           results = results.filter(r => {
             let spellSchool = r.document.system?.school || "";
             return spellSchool === selectedSpellSchool;
+          });
+        }
+        if (selectedSpellClass !== "all") {
+          results = results.filter(r => {
+            let spellClasses = getSpellClasses(r.document);
+            return spellClasses.includes(selectedSpellClass);
           });
         }
       }

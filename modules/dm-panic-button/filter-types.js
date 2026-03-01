@@ -21,12 +21,35 @@ export const FILTER_CONFIG = {
         siege: "Siege"
       },
       armor: {
-        light: "Light",
-        medium: "Medium",
-        heavy: "Heavy",
+        light: "Light Armor",
+        medium: "Medium Armor",
+        heavy: "Heavy Armor",
         shield: "Shield",
         trinket: "Trinket",
         clothing: "Clothing"
+      },
+      equipment: {
+        // Equipment types - key matches system.type.value
+        light: "Light Armor",
+        medium: "Medium Armor",
+        heavy: "Heavy Armor",
+        shield: "Shield",
+        ring: "Ring",
+        rod: "Rod",
+        wand: "Wand",
+        wondrous: "Wondrous Item",
+        trinket: "Trinket",
+        clothing: "Clothing",
+        vehicle: "Vehicle",
+        staff: "Staff",
+        amulet: "Amulet",
+        belt: "Belt",
+        boots: "Boots",
+        bracers: "Bracers",
+        cloak: "Cloak",
+        gloves: "Gloves",
+        hat: "Hat",
+        helm: "Helm"
       },
       consumable: {
         ammo: "Ammunition",
@@ -36,7 +59,10 @@ export const FILTER_CONFIG = {
         scroll: "Scroll",
         wand: "Wand",
         rod: "Rod",
-        trinket: "Trinket"
+        trinket: "Trinket",
+        explosive: "Explosive",
+        spell: "Spell Scroll",
+        gear: "Adventuring Gear"
       },
       tool: {
         art: "Artisan's Tools",
@@ -56,6 +82,26 @@ export const FILTER_CONFIG = {
         7: "7th",
         8: "8th",
         9: "9th"
+      },
+      feat: {
+        // Feat types - key matches system.type.value
+        class: "Class Feature",
+        monster: "Monster Feature",
+        race: "Species Feature",
+        background: "Background Feature",
+        feat: "Feat",
+        origin: "Origin Feat",
+        general: "General Feat",
+        fighting: "Fighting Style",
+        fightingStyle: "Fighting Style",
+        metamagic: "Metamagic",
+        eldritchInvocation: "Eldritch Invocation",
+        pact: "Pact Boon",
+        maneuver: "Maneuver",
+        artificerInfusion: "Artificer Infusion",
+        rune: "Rune",
+        supernaturalGift: "Supernatural Gift",
+        epicBoon: "Epic Boon"
       }
     },
     // Spell schools - separate dimension, key matches system.school
@@ -68,6 +114,18 @@ export const FILTER_CONFIG = {
       ill: "Illusion",
       nec: "Necromancy",
       trs: "Transmutation"
+    },
+    // Spell classes - key matches system.sourceClass or identifier
+    spellClasses: {
+      artificer: "Artificer",
+      bard: "Bard",
+      cleric: "Cleric",
+      druid: "Druid",
+      paladin: "Paladin",
+      ranger: "Ranger",
+      sorcerer: "Sorcerer",
+      warlock: "Warlock",
+      wizard: "Wizard"
     },
     // Which subtypes cannot be "placed" as loot (Give only)
     noPlacement: ["natural"]
