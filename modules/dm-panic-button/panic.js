@@ -1,3 +1,38 @@
+/**
+ * Returns a Foundry VTT dnd5e item data template.
+ * @param {Object} overrides - Properties to override in the template.
+ * @returns {Object} Item data object
+ */
+function createItemTemplate(overrides = {}) {
+  const base = {
+    name: "Item Name",
+    type: "weapon", // or "equipment", "consumable", etc.
+    img: "icons/svg/item-bag.svg",
+    system: {
+      description: { value: "<p>Description here</p>" },
+      price: { value: 0, denomination: "gp" },
+      identified: true,
+      quantity: 1,
+      weight: { value: 0 },
+      rarity: "common",
+      attunement: 0,
+      attuned: false,
+      equipped: false,
+      type: { value: "martialM", baseItem: "glaive" },
+      armor: { value: 0 },
+      hp: { value: 0 },
+      uses: { max: 0, spent: 0 },
+      properties: [],
+      identifier: "unique-id"
+    },
+    flags: {},
+    effects: [],
+    folder: null,
+    _stats: {},
+    ownership: {}
+  };
+  return foundry.utils.mergeObject(base, overrides, { inplace: false });
+}
 /* =================================================
  * TOKEN HUD BUTTON (renderTokenHUD hook for Foundry v13)
 ================================================= */
@@ -291,20 +326,20 @@ async function handleItemPlaceClick(event) {
   // Convert spells to scrolls for loot placement
   let lootItem = item;
   if (item.type === "spell") {
-    // Create a scroll item from the spell
-    lootItem = await Item.create({
+    // Create a scroll item from the spell using the template function
+    const scrollData = createItemTemplate({
       name: `Scroll of ${item.name}`,
       type: "consumable",
       img: item.img || "icons/commodities/paper/paper-script-spiral-tan.webp",
-      data: {
+      system: {
         description: item.system?.description || item.data?.description || {},
         consumableType: "scroll",
         uses: { value: 1, max: 1, per: "charges" },
         rarity: item.system?.rarity || item.data?.rarity || "common",
-        // Embed spell data if your system supports it
         spell: item.toObject()
       }
-    }, { temporary: true });
+    });
+    lootItem = await Item.create(scrollData, { temporary: true });
     console.log("DM Panic Button: Converted spell to scroll", lootItem);
   }
 
@@ -381,11 +416,48 @@ async function runContextAction(action, entry) {
       doc.sheet?.render(true);
       break;
 
-    case "chat":
+    case "chat": {
+      // Post the document's description to chat with working roll macros
+      let description = "";
+      
+      // Try to get description from various document types
+      if (doc.system?.description?.value) {
+        description = doc.system.description.value; // Items, Spells, Features
+      } else if (doc.content) {
+        description = doc.content; // Journal entries (page content)
+      } else if (doc.pages?.size > 0) {
+        // Journal with pages - get first page content
+        const firstPage = doc.pages.contents[0];
+        description = firstPage?.text?.content || firstPage?.content || "";
+      } else if (doc.description) {
+        description = doc.description; // Actors, some other docs
+      }
+      
+      // Fallback to name if no description found
+      if (!description || description.trim() === "") {
+        description = `<i>No description available for ${doc.name}</i>`;
+      }
+      
+      // Enrich the HTML to make [[/attack]], [[/damage]], etc. work
+      // For Items, we need to provide rollData and the item as context
+      let enrichedDescription = description;
+      try {
+        const enrichContext = {
+          rollData: doc.getRollData ? doc.getRollData() : {},
+          relativeTo: doc
+        };
+        enrichedDescription = await TextEditor.enrichHTML(description, enrichContext);
+      } catch (err) {
+        console.warn("DM Panic Button: Failed to enrich HTML, using raw description", err);
+        enrichedDescription = description;
+      }
+      
       ChatMessage.create({
-        content: `<b>${doc.name}</b>`
+        content: `<h3>${doc.name}</h3>${enrichedDescription}`,
+        speaker: ChatMessage.getSpeaker()
       });
       break;
+    }
 
 
     /* ---------- Actor ---------- */
@@ -499,6 +571,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
 
   let selectedType = "all";
   let selectedItemSubtype = "all";
+  let selectedItemSubSubtype = "all"; // Third-tier filter (e.g., martialM, martialR, natural)
+
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
       const btn = $(this);
@@ -508,15 +582,18 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       }
     });
 
-    // Remove old subtype menu
+    // Remove old subtype and sub-subtype menus (and their separator)
     html.find("#panic-subtype-menu").remove();
+    html.find("#panic-subtype-subsubtype-hr").remove();
+    html.find("#panic-subsubtype-menu").remove();
+
     // Show subtype pills if Item selected
     if (selectedType === "Item") {
       // Get all unique item types (e.g., weapon, armor, consumable, tool, loot, container)
       let allItems = game.items.contents;
-      let subtypes = [...new Set(allItems.map(i => i.type || i.system?.type?.value || ""))].filter(Boolean);
+      let subtypes = [...new Set(allItems.map(i => i.type || ""))].filter(Boolean);
       if (subtypes.length) {
-        let subtypeHtml = `<div id="panic-subtype-menu" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px;">`;
+        let subtypeHtml = `<div id="panic-subtype-menu" class="panic-item-subtype-menu" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px;">`;
         subtypeHtml += `<button class="panic-subtype-btn panic-pill" data-subtype="all">All</button>`;
         subtypes.forEach(st => {
           subtypeHtml += `<button class="panic-subtype-btn panic-pill" data-subtype="${st}">${st}</button>`;
@@ -531,23 +608,68 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           } else {
             selectedItemSubtype = clickedSubtype;
           }
+          selectedItemSubSubtype = "all"; // Reset sub-subtype when subtype changes
           updateCategoryMenu();
           doSearch();
         });
         html.find('.panic-subtype-btn').removeClass('selected');
         html.find(`.panic-subtype-btn[data-subtype='${selectedItemSubtype}']`).addClass('selected');
       }
+
+      // Show sub-subtype pills if "weapon" is selected (for martialM, martialR, simpleM, simpleR, natural, etc.)
+      if (selectedItemSubtype === "weapon") {
+        let weaponItems = allItems.filter(i => i.type === "weapon");
+        let subSubtypes = [...new Set(weaponItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
+        if (subSubtypes.length) {
+          // Add a horizontal line between subtype and sub-subtype menus
+          html.find("#panic-subtype-menu").after('<hr id="panic-subtype-subsubtype-hr" style="border:0;border-top:1.5px solid #bfa046;margin:8px 0 4px 0;">');
+          let subSubtypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px;">`;
+          subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All</button>`;
+          subSubtypes.forEach(sst => {
+            // Friendly labels for weapon subtypes
+            const labels = {
+              "simpleM": "Simple Melee",
+              "simpleR": "Simple Ranged",
+              "martialM": "Martial Melee",
+              "martialR": "Martial Ranged",
+              "natural": "Natural",
+              "improv": "Improvised",
+              "siege": "Siege"
+            };
+            const label = labels[sst] || sst;
+            subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${sst}">${label}</button>`;
+          });
+          subSubtypeHtml += `</div>`;
+          html.find("#panic-subtype-subsubtype-hr").after($(subSubtypeHtml));
+          html.find(".panic-subsubtype-btn").on("click", function() {
+            const clickedSubSubtype = $(this).data("subsubtype");
+            // Toggle logic
+            if (selectedItemSubSubtype === clickedSubSubtype) {
+              selectedItemSubSubtype = "all";
+            } else {
+              selectedItemSubSubtype = clickedSubSubtype;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-subsubtype-btn').removeClass('selected');
+          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+        }
+      }
     }
   }
+
   html.find(".panic-category-btn").on("click", function() {
     const clickedType = $(this).data("type");
     // Toggle logic: clicking again on the selected chip turns it off (back to 'all')
     if (selectedType === clickedType) {
       selectedType = "all";
       selectedItemSubtype = "all";
+      selectedItemSubSubtype = "all";
     } else {
       selectedType = clickedType;
       selectedItemSubtype = "all";
+      selectedItemSubSubtype = "all";
     }
     updateCategoryMenu();
     doSearch();
@@ -555,13 +677,23 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   updateCategoryMenu();
 
 
-  function renderResults(list){
+  async function renderResults(list){
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
-    list.forEach(entry=>{
+    for (const entry of list) {
       const isActive = entry.type === "Scene" && entry.document.active;
       const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
-      const canPlace = entry.type === "Item";
+      
+      // Determine if item can be placed as loot
+      // Natural weapons cannot be placed (they're part of a creature, not loot)
+      let canPlace = entry.type === "Item";
+      if (canPlace && entry.document.type === "weapon") {
+        const weaponCategory = entry.document.system?.type?.value || "";
+        if (weaponCategory === "natural") {
+          canPlace = false;
+        }
+      }
+      
       let detailsHtml = "";
       if (entry.type === "Item") {
         const doc = entry.document;
@@ -571,14 +703,26 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         const rarity = doc.system?.rarity || "";
         const attunement = doc.system?.attunement === "required" ? "Requires Attunement" : "";
         let desc = doc.system?.description?.value || doc.data?.description?.value || "";
-        desc = desc.replace(/<[^>]+>/g, "").slice(0, 120) + (desc.length > 120 ? "..." : "");
+        
+        // Enrich description HTML so roll macros work
+        let enrichedDesc = desc;
+        try {
+          const enrichContext = {
+            rollData: doc.getRollData ? doc.getRollData() : {},
+            relativeTo: doc
+          };
+          enrichedDesc = await TextEditor.enrichHTML(desc, enrichContext);
+        } catch (err) {
+          console.warn("DM Panic Button: Failed to enrich item description", err);
+        }
+        
         detailsHtml = `
           <div class="panic-item-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
             <img src="${img}" alt="item" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
             <div style="flex:1;min-width:0;">
               <div style="font-size:1.1em;font-weight:bold;">${entry.name}</div>
               <div style="font-size:0.95em;color:#bfa046;">${type}${subtype && subtype !== type ? ` (${subtype})` : ""}${rarity ? ` | ${rarity}` : ""}${attunement ? ` | ${attunement}` : ""}</div>
-              <div style="font-size:0.93em;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${desc}</div>
+              <div class="panic-item-desc" style="font-size:0.93em;color:#bbb;">${enrichedDesc}</div>
             </div>
           </div>
         `;
@@ -624,11 +768,11 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         );
       });
       resultsDiv.append(el);
-    });
+    }
   }
 
 
-  function doSearch() {
+  async function doSearch() {
     const query = input.val().trim();
     let results = [];
     // If no query, show all of the selected type (or all types)
@@ -639,8 +783,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           if (!doc?.name) return;
           // If Item, filter by subtype if set
           if (type === "Item" && selectedType === "Item" && selectedItemSubtype !== "all") {
-            let docType = doc.type || doc.system?.type?.value || "";
+            let docType = doc.type || "";
             if (docType !== selectedItemSubtype) return;
+          }
+          // If weapon, filter by sub-subtype (martialM, martialR, etc.) if set
+          if (type === "Item" && selectedItemSubtype === "weapon" && selectedItemSubSubtype !== "all") {
+            let weaponCategory = doc.system?.type?.value || "";
+            if (weaponCategory !== selectedItemSubSubtype) return;
           }
           results.push({
             name: doc.name,
@@ -678,12 +827,19 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       // If Item, filter by subtype if set
       if (selectedType === "Item" && selectedItemSubtype !== "all") {
         results = results.filter(r => {
-          let docType = r.document.type || r.document.system?.type?.value || "";
+          let docType = r.document.type || "";
           return docType === selectedItemSubtype;
         });
       }
+      // If weapon, filter by sub-subtype if set
+      if (selectedItemSubtype === "weapon" && selectedItemSubSubtype !== "all") {
+        results = results.filter(r => {
+          let weaponCategory = r.document.system?.type?.value || "";
+          return weaponCategory === selectedItemSubSubtype;
+        });
+      }
     }
-    renderResults(results);
+    await renderResults(results);
   }
 
   // Remove the old dropdown if present
