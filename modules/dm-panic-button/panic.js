@@ -1931,11 +1931,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     const renderFolderTree = async (node, depth = 0) => {
       const container = $('<div class="panic-folder-tree"></div>');
       
-      // Sort children folders by sort order, then name ("No Folder" last)
+      // Sort children folders alphabetically ("No Folder" last)
       const sortedChildren = [...node.children.values()].sort((a, b) => {
         if (a.id === "__no_folder__") return 1;
         if (b.id === "__no_folder__") return -1;
-        if (a.sort !== b.sort) return a.sort - b.sort;
         return a.name.localeCompare(b.name);
       });
       
