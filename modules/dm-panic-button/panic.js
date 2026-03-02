@@ -1289,7 +1289,82 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   async function renderResults(list){
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
+    
+    // Build folder tree structure for journals
+    // Each node: { id, name, sort, children: Map, journals: [] }
+    const buildFolderTree = (entries) => {
+      const root = { id: "__root__", name: "Root", sort: 0, children: new Map(), journals: [] };
+      const noFolder = { id: "__no_folder__", name: "No Folder", sort: Infinity, children: new Map(), journals: [] };
+      
+      // First, build a map of all folders we need
+      const folderNodes = new Map();
+      
+      for (const entry of entries) {
+        if (entry.type !== "Journal") continue;
+        const doc = entry.document;
+        const folder = doc.folder;
+        
+        if (!folder) {
+          noFolder.journals.push(entry);
+          continue;
+        }
+        
+        // Walk up and ensure all ancestor folders exist in our tree
+        const ancestors = [];
+        let current = folder;
+        while (current) {
+          ancestors.unshift(current);
+          current = current.folder;
+        }
+        
+        // Build/link the folder chain
+        let parentNode = root;
+        for (const f of ancestors) {
+          if (!folderNodes.has(f.id)) {
+            folderNodes.set(f.id, {
+              id: f.id,
+              name: f.name,
+              sort: f.sort ?? 0,
+              children: new Map(),
+              journals: []
+            });
+          }
+          const node = folderNodes.get(f.id);
+          if (!parentNode.children.has(f.id)) {
+            parentNode.children.set(f.id, node);
+          }
+          parentNode = node;
+        }
+        
+        // Add journal to its direct parent folder
+        parentNode.journals.push(entry);
+      }
+      
+      // Add "No Folder" if it has journals
+      if (noFolder.journals.length > 0) {
+        root.children.set("__no_folder__", noFolder);
+      }
+      
+      return root;
+    };
+    
+    // Separate journals from other entries
+    const nonJournalEntries = [];
+    const journalEntries = [];
+    
     for (const entry of list) {
+      if (entry.type === "Journal") {
+        journalEntries.push(entry);
+      } else {
+        nonJournalEntries.push(entry);
+      }
+    }
+    
+    // Build the folder tree
+    const folderTree = buildFolderTree(journalEntries);
+    
+    // Helper to render a single entry
+    const renderEntry = async (entry) => {
       const isActive = entry.type === "Scene" && entry.document.active;
       const canGive = actorSelected && (entry.type === "Item" || entry.type === "ActiveEffect");
       
@@ -1663,6 +1738,44 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         `;
       }
       
+      // Journal-specific details with page list
+      if (entry.type === "Journal") {
+        const doc = entry.document;
+        const img = doc.pages?.contents?.[0]?.src || "icons/svg/book.svg";
+        const pageCount = doc.pages?.size || 0;
+        const pageLabel = pageCount === 1 ? "1 page" : `${pageCount} pages`;
+        
+        // Build page list HTML
+        let pageListHtml = "";
+        if (pageCount > 0) {
+          const pageItems = doc.pages.contents
+            .sort((a, b) => a.sort - b.sort)
+            .map(p => {
+              const pageType = p.type || "text";
+              const pageIcon = pageType === "image" ? "🖼" : pageType === "video" ? "🎬" : pageType === "pdf" ? "📄" : "📝";
+              return `<div class="panic-page-row" style="display:flex;align-items:center;gap:6px;padding:3px 6px;margin:2px 0;border-radius:4px;background:rgba(191,160,70,0.1);font-size:0.9em;">
+                <span class="panic-page-link" data-page-id="${p._id}" style="cursor:pointer;flex:1;" title="Open ${p.name}">${pageIcon} ${p.name}</span>
+                <span class="panic-page-chat" data-page-id="${p._id}" style="cursor:pointer;opacity:0.7;" title="Send to chat">💬</span>
+              </div>`;
+            })
+            .join("");
+          pageListHtml = `<div class="panic-journal-pages" style="display:none;margin-top:6px;padding-left:10px;border-left:2px solid #bfa046;">${pageItems}</div>`;
+        }
+        
+        detailsHtml = `
+          <div class="panic-journal-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
+            <img src="${img}" alt="journal" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
+            <div style="flex:1;min-width:0;">
+              <div class="panic-journal-toggle" style="font-size:1.1em;font-weight:bold;cursor:pointer;user-select:none;" title="Click to show pages">
+                <span class="panic-arrow" style="color:#bfa046;font-size:0.7em;margin-right:4px;">▶</span>${entry.name}
+              </div>
+              <div style="font-size:0.95em;color:#bfa046;">${pageLabel}</div>
+              ${pageListHtml}
+            </div>
+          </div>
+        `;
+      }
+      
       // Build description HTML (for items only, placed after actions)
       let descHtml = "";
       if (entry.type === "Item") {
@@ -1734,7 +1847,173 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           arrow.text("▼");
         }
       });
+      // Toggle journal pages list (clicking the journal title)
+      el.find(".panic-journal-toggle").on("click", function(ev) {
+        ev.stopPropagation();
+        const titleDiv = $(this);
+        const arrow = titleDiv.find(".panic-arrow");
+        const pagesDiv = titleDiv.closest(".panic-journal-details").find(".panic-journal-pages");
+        if (pagesDiv.is(":visible")) {
+          pagesDiv.slideUp(150);
+          arrow.text("▶");
+        } else {
+          pagesDiv.slideDown(150);
+          arrow.text("▼");
+        }
+      });
+      // Click on individual journal page to open to that page
+      el.find(".panic-page-link").on("click", function(ev) {
+        ev.stopPropagation();
+        const pageId = $(this).data("page-id");
+        const doc = entry.document;
+        doc.sheet?.render(true, { pageId: pageId });
+      });
+      // Chat button for individual journal pages
+      el.find(".panic-page-chat").on("click", async function(ev) {
+        ev.stopPropagation();
+        const pageId = $(this).data("page-id");
+        const doc = entry.document;
+        const page = doc.pages.get(pageId);
+        if (!page) return;
+        
+        // Get page content based on type
+        let content = "";
+        if (page.type === "text") {
+          content = page.text?.content || "";
+          
+          // Strip DM-only/secret content before posting to chat
+          // Parse HTML and remove secret blocks
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = content;
+          
+          // Remove <section class="secret"> blocks
+          tempDiv.querySelectorAll("section.secret, .secret, [data-visibility='gm']").forEach(el => el.remove());
+          
+          // Also remove elements with id starting with "secret-"
+          tempDiv.querySelectorAll("[id^='secret-']").forEach(el => el.remove());
+          
+          content = tempDiv.innerHTML;
+        } else if (page.type === "image") {
+          content = `<img src="${page.src}" alt="${page.name}" style="max-width:100%;">`;
+        } else if (page.type === "video") {
+          content = `<p><em>Video: ${page.name}</em></p>`;
+        } else if (page.type === "pdf") {
+          content = `<p><em>PDF: ${page.name}</em></p>`;
+        }
+        
+        // Enrich the HTML
+        let enrichedContent = content;
+        try {
+          enrichedContent = await TextEditor.enrichHTML(content, { relativeTo: doc });
+        } catch (err) {}
+        
+        ChatMessage.create({
+          content: `<h3>${doc.name}: ${page.name}</h3>${enrichedContent}`,
+          speaker: ChatMessage.getSpeaker()
+        });
+      });
+      // Hover effect for page rows
+      el.find(".panic-page-row").on("mouseenter", function() {
+        $(this).css("background", "rgba(191,160,70,0.3)");
+      }).on("mouseleave", function() {
+        $(this).css("background", "rgba(191,160,70,0.1)");
+      });
+      // Hover effect for chat icon
+      el.find(".panic-page-chat").on("mouseenter", function() {
+        $(this).css("opacity", "1");
+      }).on("mouseleave", function() {
+        $(this).css("opacity", "0.7");
+      });
+      return el;
+    };
+    
+    // Recursive function to render folder tree
+    const renderFolderTree = async (node, depth = 0) => {
+      const container = $('<div class="panic-folder-tree"></div>');
+      
+      // Sort children folders by sort order, then name ("No Folder" last)
+      const sortedChildren = [...node.children.values()].sort((a, b) => {
+        if (a.id === "__no_folder__") return 1;
+        if (b.id === "__no_folder__") return -1;
+        if (a.sort !== b.sort) return a.sort - b.sort;
+        return a.name.localeCompare(b.name);
+      });
+      
+      for (const childFolder of sortedChildren) {
+        const safeFolderId = childFolder.id.replace(/[^a-zA-Z0-9]/g, '_');
+        const hasChildren = childFolder.children.size > 0;
+        const hasJournals = childFolder.journals.length > 0;
+        
+        // Count total journals in this folder and all subfolders
+        const countJournals = (n) => {
+          let count = n.journals.length;
+          for (const c of n.children.values()) count += countJournals(c);
+          return count;
+        };
+        const totalJournals = countJournals(childFolder);
+        
+        // Create folder header with indentation based on depth
+        const indent = depth * 16;
+        const folderHeader = $(`
+          <div class="panic-folder-header" data-folder-id="${safeFolderId}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;padding-left:${10 + indent}px;margin:4px 0 2px 0;background:linear-gradient(90deg,rgba(191,160,70,${0.25 - depth * 0.05}) 0%,transparent 100%);border-left:3px solid #bfa046;cursor:pointer;user-select:none;">
+            <span class="panic-folder-arrow" style="color:#bfa046;font-size:0.8em;">▶</span>
+            <span style="font-size:${1.05 - depth * 0.05}em;font-weight:bold;color:#bfa046;">📁 ${childFolder.name}</span>
+            <span style="font-size:0.85em;color:#888;margin-left:auto;">${totalJournals} ${totalJournals === 1 ? 'journal' : 'journals'}</span>
+          </div>
+        `);
+        
+        // Create container for this folder's contents (starts collapsed)
+        const folderContents = $(`<div class="panic-folder-contents" data-folder-id="${safeFolderId}" style="display:none;"></div>`);
+        
+        // Add subfolders first (recursively)
+        if (hasChildren) {
+          const subfolderContainer = await renderFolderTree(childFolder, depth + 1);
+          folderContents.append(subfolderContainer);
+        }
+        
+        // Add journals in this folder
+        if (hasJournals) {
+          const journalContainer = $(`<div class="panic-folder-journals" style="padding-left:${indent + 16}px;"></div>`);
+          childFolder.journals.sort((a, b) => a.name.localeCompare(b.name));
+          for (const entry of childFolder.journals) {
+            const el = await renderEntry(entry);
+            journalContainer.append(el);
+          }
+          folderContents.append(journalContainer);
+        }
+        
+        // Toggle folder collapse/expand
+        const fid = safeFolderId;
+        folderHeader.on("click", function(ev) {
+          ev.stopPropagation();
+          const arrow = $(this).find(".panic-folder-arrow");
+          const contents = $(this).next(`.panic-folder-contents[data-folder-id="${fid}"]`);
+          if (contents.is(":visible")) {
+            contents.slideUp(150);
+            arrow.text("▶");
+          } else {
+            contents.slideDown(150);
+            arrow.text("▼");
+          }
+        });
+        
+        container.append(folderHeader);
+        container.append(folderContents);
+      }
+      
+      return container;
+    };
+    
+    // Render non-journal entries first
+    for (const entry of nonJournalEntries) {
+      const el = await renderEntry(entry);
       resultsDiv.append(el);
+    }
+    
+    // Render journal folder tree
+    if (folderTree.children.size > 0) {
+      const treeContainer = await renderFolderTree(folderTree, 0);
+      resultsDiv.append(treeContainer);
     }
   }
 
