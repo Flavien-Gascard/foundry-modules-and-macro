@@ -1,38 +1,45 @@
 # 🧙 DM Panic Button
+
 *A Foundry VTT Command Palette for Dungeon Masters*
 
-DM Panic Button is a **world-aware control interface** for Foundry VTT that allows Game Masters to quickly **search, navigate, and create world content** without using Foundry sidebars.
+**DM Panic Button** is a world-aware control interface for Foundry VTT that allows Game Masters to quickly **search, navigate, spawn, and manage world content** without navigating Foundry sidebars.
 
-The goal is simple:
-
-> Reduce friction between DM intention and world action.
-
-Instead of navigating directories, dragging actors, or switching tabs, the GM can perform common tasks from a single searchable interface.
+> **Goal:** Reduce friction between DM intention and world action.
 
 ---
 
 ## ✨ Philosophy
 
-DM Panic Button is **not** a combat automation tool.
-
-Foundry already excels at combat management.
+DM Panic Button is **not** a combat automation tool — Foundry already excels at that.
 
 This module focuses on:
-
-- ⚡ Preparation
-- 🧭 Navigation
-- 🧱 Creation
-- 📖 Lookup
+- ⚡ **Preparation** — Quick access to world content
+- 🧭 **Navigation** — Scene switching & viewing
+- 🧱 **Creation** — Spawn actors & place loot
+- 📖 **Lookup** — Search & reference documents
 
 It acts as a **GM command console** layered on top of Foundry.
 
 ---
 
-## ✅ Current Features (v0.8)
+## 📁 Module Structure
+
+```
+dm-panic-button/
+├── module.json                  # Foundry module manifest
+├── panic.js                     # Main logic (734 lines)
+├── panic.html                   # UI template
+├── styles.css                   # Fantasy theme styling (190 lines)
+└── item-attribute-reference.md  # Dev reference for dnd5e item data
+```
+
+---
+
+## ✅ Features
 
 ### 🔎 World Search
-Searches **only world documents** (no compendiums):
 
+Fuzzy search across **world documents only** (no compendiums):
 - Actors
 - Items
 - Journals
@@ -40,27 +47,47 @@ Searches **only world documents** (no compendiums):
 - RollTables
 - Macros
 
-This ensures results are curated, customized, and safe to use.
+Filter by category using pill buttons, with **item subtype filtering** (weapon, armor, consumable, etc.) when "Items" is selected.
 
 ---
 
 ### 🧙 Actor Spawning
-Spawn actors directly from search.
 
-Workflow:
+Spawn actors directly from search results:
 
-Open Panic Button
-→ Search Actor
-→ Click Spawn
-→ Click map location
+1. Open Panic Button (`Ctrl+Space` or Token HUD button)
+2. Search for an Actor
+3. Click **🧙 Spawn**
+4. Click on the map to place the token
 
+**Features:**
+- Click-to-place with grid snapping (V13+ compatible)
+- Uses actor's prototype token settings
+- Works with custom artwork & configurations
 
-Features:
+---
 
-- Click-to-place spawning
-- Grid snapping
-- Uses actor prototype token settings
-- Works with customized artwork & configs
+### 🪙 Item Placement (Loot Tokens)
+
+Place items directly on the map as loot:
+
+1. Search for an Item
+2. Click **🪙 Place Item**
+3. Click on the map
+
+**Features:**
+- Creates an NPC actor as a loot container
+- Automatically converts **spells → scrolls**
+- Optionally runs the "TurnToItemPile" macro (if present)
+- Uses the item's image as the token
+
+---
+
+### ➕ Give to Actor
+
+If a token is selected, the **➕ Give** button appears:
+- Adds Items directly to the actor's inventory
+- Adds ActiveEffects to the actor
 
 ---
 
@@ -68,131 +95,94 @@ Features:
 
 Two scene interaction modes:
 
-#### 👁 View Scene
-- GM-only view
-- Players remain on current scene
-- Ideal for preparation
-
-#### 🗺 Switch Scene
-- Activates scene
-- Moves all players
-- Session transition tool
+| Action | Effect |
+|--------|--------|
+| **👁 View** | GM-only view; players stay on current scene |
+| **🗺 Switch** | Activates scene and moves all players |
 
 Active scenes are marked with ⭐.
 
 ---
 
-### 📦 Item Interaction
+### 💬 Quick Chat
 
-If a token is selected:
-
-- ➕ Give Item → adds item directly to actor inventory
+Post document info directly to chat:
+- Items post their full item card (if supported)
+- Other documents post their name as a quick reference
 
 ---
 
-### 💬 Quick Chat Reference
+### ⌨️ Hotkey & Token HUD
 
-Post document names directly to chat for quick reference.
+- **Ctrl+Space** — Toggle the Panic Button panel
+- **Token HUD Button** — 🔥 icon appears on token HUD (GM only)
 
 ---
 
 ### 🎨 Fantasy UI Theme
 
-Custom-styled interface designed to feel like an **arcane codex** rather than a utility window.
-
----
-
-## 🏗 Application Structure
-dm-panic-button/
-│
-├── module.json # Foundry module definition
-├── panic.js # Main application + logic
-├── panic.html # UI layout
-├── styles.css # Fantasy theme styling
-└── README.md
-
+Custom arcane/fantasy theme with:
+- Dark gradient backgrounds
+- Gold accent colors & glowing effects
+- Pill-style filter buttons
+- Animated search focus pulse
+- Styled result cards with hover effects
 
 ---
 
 ## 🧠 Architecture Overview
 
-### 1. Application Layer
+### Application Layer
 
-`DMPanicButton` extends Foundry's `Application`.
+`DMPanicButton` extends Foundry's `Application` class:
+- Manages window rendering & lifecycle
+- Template: `panic.html`
+- Registered globally as `globalThis.DMPanicButton`
 
-Responsible for:
-- Window rendering
-- UI lifecycle
-- Input focus
+### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `createItemTemplate()` | Builds dnd5e item data objects |
+| `fuzzyScore()` | Simple fuzzy matching for search |
+| `searchDocuments()` | Scans all world collections |
+| `startSpawnPlacement()` / `handleSpawnClick()` | Actor token placement with grid snapping |
+| `startItemPlacement()` / `handleItemPlaceClick()` | Loot token placement (spell→scroll conversion) |
+| `runContextAction()` | Central action dispatcher |
+
+### Action Engine
+
+All interactions route through `runContextAction(action, entry)`:
+
+| Action | Behavior |
+|--------|----------|
+| `open` | Opens the document's sheet |
+| `chat` | Posts to chat |
+| `spawn` | Initiates actor placement |
+| `place-item` | Initiates item/loot placement |
+| `give-item` | Adds item/effect to selected actor |
+| `view-scene` | GM views scene |
+| `switch-scene` | Activates scene for all |
+
+### Hooks Used
+
+- `renderTokenHUD` — Adds 🔥 button to token HUD
+- `ready` — Registers global class & settings
+- `setup` — Registers keybindings
+- `renderDMPanicButton` — Builds dynamic UI
 
 ---
 
-### 2. Search Engine
+## ⚙️ Settings
 
-Central dispatcher:
+| Setting | Description |
+|---------|-------------|
+| **Item Pile Icon URL** | Custom icon for placed item piles |
 
-runContextAction(action, entry)
+---
 
-All interactions pass through this function.
+## 📋 Compatibility
 
-Benefits:
-
-Single responsibility
-
-Easy feature expansion
-
-Clean debugging
-
-4. Spawn Placement System
-
-Two-phase workflow:
-
-Spawn Requested
-→ Placement Mode
-→ Canvas Click
-→ Token Creation
-
-Handled via:
-
-startSpawnPlacement()
-handleSpawnClick()
-5. Scene Control
-
-Uses native Foundry Scene document methods:
-
-scene.view()
-scene.activate()
-
-Central dispatcher:
-
-runContextAction(action, entry)
-
-All interactions pass through this function.
-
-Benefits:
-
-Single responsibility
-
-Easy feature expansion
-
-Clean debugging
-
-4. Spawn Placement System
-
-Two-phase workflow:
-
-Spawn Requested
-→ Placement Mode
-→ Canvas Click
-→ Token Creation
-
-Handled via:
-
-startSpawnPlacement()
-handleSpawnClick()
-5. Scene Control
-
-Uses native Foundry Scene document methods:
-
-scene.view()
-scene.activate()
+- **Foundry VTT:** v13+
+- **System:** dnd5e (item data structure)
+- **APIs:** Modern Foundry V13 APIs (`canvas.grid.getSnappedPoint`, etc.)
