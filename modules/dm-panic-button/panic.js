@@ -491,7 +491,34 @@ async function handleItemPlaceClick(event) {
     return;
   }
   const tokenDoc = await actor.getTokenDocument();
-  tokenDoc.updateSource({ x: snapped.x, y: snapped.y, width: 0.5, height: 0.5 });
+  tokenDoc.updateSource({
+    x: snapped.x,
+    y: snapped.y,
+    width: 0.5,
+    height: 0.5,
+    light: {
+      alpha: 0.5,
+      angle: 360,
+      bright: 5,
+      color: "#fff700",
+      coloration: 1,
+      dim: 1.5,
+      attenuation: 0.5,
+      luminosity: 0.5,
+      saturation: 0,
+      contrast: 0,
+      shadows: 0,
+      animation: {
+        type: "starlight",
+        speed: 5,
+        intensity: 5,
+        reverse: false
+      },
+      darkness: { min: 0, max: 1 },
+      negative: false,
+      priority: 0
+    }
+  });
   const createdTokens = await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
   ui.notifications.info(`Loot '${lootItem.name}' placed.`);
 
