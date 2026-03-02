@@ -22,7 +22,9 @@ button.panic-pill, .panic-pill, .panic-category-btn, .panic-subtype-btn, .panic-
   box-shadow: 0 1px 4px #000a !important;
   cursor: pointer !important;
   width: auto !important;
-  min-width: 0 !important;
+  min-width: fit-content !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
   letter-spacing: 0.5px !important;
   transition: all 0.15s ease !important;
   margin: 2px 4px !important;

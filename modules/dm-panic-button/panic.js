@@ -491,7 +491,7 @@ async function handleItemPlaceClick(event) {
     return;
   }
   const tokenDoc = await actor.getTokenDocument();
-  tokenDoc.updateSource({ x: snapped.x, y: snapped.y });
+  tokenDoc.updateSource({ x: snapped.x, y: snapped.y, width: 0.5, height: 0.5 });
   const createdTokens = await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
   ui.notifications.info(`Loot '${lootItem.name}' placed.`);
 
@@ -702,6 +702,11 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   let selectedItemSubSubtype = "all"; // Third-tier filter (e.g., martialM, martialR, natural, spell level)
   let selectedSpellSchool = "all"; // Fourth-tier filter for spell school
   let selectedSpellClass = "all"; // Fifth-tier filter for spell class
+  
+  // Actor filter state
+  let selectedActorSubtype = "all"; // npc, character, vehicle, etc.
+  let selectedCreatureType = "all"; // dragon, humanoid, beast, etc.
+  let selectedCRRange = "all"; // CR range for NPCs
 
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
@@ -1061,6 +1066,120 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       }
     }
     
+    // Show Actor subtype pills if Actor selected
+    if (selectedType === "Actor") {
+      let allActors = game.actors.contents;
+      let actorSubtypes = [...new Set(allActors.map(a => a.type || ""))].filter(Boolean);
+      if (actorSubtypes.length) {
+        let actorSubtypeHtml = `<div id="panic-actor-subtype-menu" class="panic-item-subtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+        actorSubtypeHtml += `<button class="panic-actor-subtype-btn panic-pill" data-subtype="all">All</button>`;
+        actorSubtypes.forEach(st => {
+          const label = st.charAt(0).toUpperCase() + st.slice(1);
+          actorSubtypeHtml += `<button class="panic-actor-subtype-btn panic-pill" data-subtype="${st}">${label}</button>`;
+        });
+        actorSubtypeHtml += `</div>`;
+        html.find("#panic-subtype-container").html(actorSubtypeHtml);
+        html.find(".panic-actor-subtype-btn").on("click", function() {
+          const clickedSubtype = $(this).data("subtype");
+          if (selectedActorSubtype === clickedSubtype) {
+            selectedActorSubtype = "all";
+          } else {
+            selectedActorSubtype = clickedSubtype;
+          }
+          selectedCreatureType = "all";
+          selectedCRRange = "all";
+          updateCategoryMenu();
+          doSearch();
+        });
+        html.find('.panic-actor-subtype-btn').removeClass('selected');
+        html.find(`.panic-actor-subtype-btn[data-subtype='${selectedActorSubtype}']`).addClass('selected');
+      }
+      
+      // Show creature type and CR filters for NPCs
+      if (selectedActorSubtype === "npc") {
+        let npcActors = allActors.filter(a => a.type === "npc");
+        
+        // Creature Type row
+        let creatureTypes = [...new Set(npcActors.map(a => a.system?.details?.type?.value || ""))].filter(Boolean).sort();
+        if (creatureTypes.length) {
+          const creatureLabels = { aberration: "Aberration", beast: "Beast", celestial: "Celestial", construct: "Construct", dragon: "Dragon", elemental: "Elemental", fey: "Fey", fiend: "Fiend", giant: "Giant", humanoid: "Humanoid", monstrosity: "Monstrosity", ooze: "Ooze", plant: "Plant", undead: "Undead" };
+          let creatureHtml = `<div id="panic-creaturetype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+          creatureHtml += `<button class="panic-creaturetype-btn panic-pill" data-creature="all">All Types</button>`;
+          creatureTypes.forEach(ct => {
+            const label = creatureLabels[ct] || ct.charAt(0).toUpperCase() + ct.slice(1);
+            creatureHtml += `<button class="panic-creaturetype-btn panic-pill" data-creature="${ct}">${label}</button>`;
+          });
+          creatureHtml += `</div>`;
+          html.find("#panic-subsubtype-container").html(creatureHtml);
+          html.find(".panic-creaturetype-btn").on("click", function() {
+            const clickedType = $(this).data("creature");
+            if (selectedCreatureType === clickedType) {
+              selectedCreatureType = "all";
+            } else {
+              selectedCreatureType = clickedType;
+            }
+            updateCategoryMenu();
+            doSearch();
+          });
+          html.find('.panic-creaturetype-btn').removeClass('selected');
+          html.find(`.panic-creaturetype-btn[data-creature='${selectedCreatureType}']`).addClass('selected');
+        }
+        
+        // CR Range row
+        let crValues = npcActors.map(a => a.system?.details?.cr).filter(cr => cr !== undefined && cr !== null);
+        if (crValues.length) {
+          // Group CRs into ranges
+          const crRanges = [
+            { key: "0", label: "CR 0", min: 0, max: 0 },
+            { key: "0.125", label: "CR 1/8", min: 0.125, max: 0.125 },
+            { key: "0.25", label: "CR 1/4", min: 0.25, max: 0.25 },
+            { key: "0.5", label: "CR 1/2", min: 0.5, max: 0.5 },
+            { key: "1-4", label: "CR 1-4", min: 1, max: 4 },
+            { key: "5-10", label: "CR 5-10", min: 5, max: 10 },
+            { key: "11-16", label: "CR 11-16", min: 11, max: 16 },
+            { key: "17+", label: "CR 17+", min: 17, max: 999 }
+          ];
+          
+          // Only show ranges that have actors
+          const availableRanges = crRanges.filter(range => 
+            crValues.some(cr => cr >= range.min && cr <= range.max)
+          );
+          
+          if (availableRanges.length) {
+            // Create CR container if it doesn't exist
+            if (!html.find("#panic-cr-container").length) {
+              html.find("#panic-subsubtype-container").after('<div id="panic-cr-container"></div>');
+            }
+            let crHtml = `<div id="panic-cr-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+            crHtml += `<button class="panic-cr-btn panic-pill" data-cr="all">All CRs</button>`;
+            availableRanges.forEach(range => {
+              crHtml += `<button class="panic-cr-btn panic-pill" data-cr="${range.key}">${range.label}</button>`;
+            });
+            crHtml += `</div>`;
+            html.find("#panic-cr-container").html(crHtml);
+            html.find(".panic-cr-btn").on("click", function() {
+              const clickedCR = $(this).data("cr");
+              if (selectedCRRange === clickedCR) {
+                selectedCRRange = "all";
+              } else {
+                selectedCRRange = clickedCR;
+              }
+              updateCategoryMenu();
+              doSearch();
+            });
+            html.find('.panic-cr-btn').removeClass('selected');
+            html.find(`.panic-cr-btn[data-cr='${selectedCRRange}']`).addClass('selected');
+          }
+        }
+      } else {
+        // Clear CR container if not NPC
+        html.find("#panic-cr-container").empty();
+      }
+    } else {
+      // Clear CR container if not Actor
+      html.find("#panic-cr-container").empty();
+    }
+    
     // Resize window to fit filter content
     resizeToFitFilters();
   }
@@ -1096,6 +1215,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         if (classWidth > maxWidth) maxWidth = classWidth;
       }
       
+      // Also check CR container (for Actor filters)
+      const crContainer = html.find("#panic-cr-container [id$='-menu']")[0];
+      if (crContainer) {
+        const crWidth = crContainer.scrollWidth + 40;
+        if (crWidth > maxWidth) maxWidth = crWidth;
+      }
+      
       // Cap at reasonable max and add window chrome padding
       maxWidth = Math.min(maxWidth + 50, 1200);
       maxWidth = Math.max(maxWidth, 500);
@@ -1114,12 +1240,18 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       selectedItemSubSubtype = "all";
       selectedSpellSchool = "all";
       selectedSpellClass = "all";
+      selectedActorSubtype = "all";
+      selectedCreatureType = "all";
+      selectedCRRange = "all";
     } else {
       selectedType = clickedType;
       selectedItemSubtype = "all";
       selectedItemSubSubtype = "all";
       selectedSpellSchool = "all";
       selectedSpellClass = "all";
+      selectedActorSubtype = "all";
+      selectedCreatureType = "all";
+      selectedCRRange = "all";
     }
     updateCategoryMenu();
     doSearch();
@@ -1424,6 +1556,86 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         `;
       }
       
+      // Actor-specific details
+      if (entry.type === "Actor") {
+        const doc = entry.document;
+        const img = doc.img || "icons/svg/mystery-man.svg";
+        const actorType = doc.type || "";
+        const sys = doc.system || {};
+        
+        let actorDetails = [];
+        
+        // For NPCs, show CR, creature type, size
+        if (actorType === "npc") {
+          // CR
+          const cr = sys.details?.cr;
+          if (cr !== undefined && cr !== null) {
+            let crDisplay = cr;
+            if (cr === 0.125) crDisplay = "1/8";
+            else if (cr === 0.25) crDisplay = "1/4";
+            else if (cr === 0.5) crDisplay = "1/2";
+            actorDetails.push(`CR ${crDisplay}`);
+          }
+          
+          // Creature type
+          const creatureType = sys.details?.type?.value;
+          const creatureLabels = { aberration: "Aberration", beast: "Beast", celestial: "Celestial", construct: "Construct", dragon: "Dragon", elemental: "Elemental", fey: "Fey", fiend: "Fiend", giant: "Giant", humanoid: "Humanoid", monstrosity: "Monstrosity", ooze: "Ooze", plant: "Plant", undead: "Undead" };
+          if (creatureType) {
+            actorDetails.push(creatureLabels[creatureType] || creatureType.charAt(0).toUpperCase() + creatureType.slice(1));
+          }
+          
+          // Size
+          const size = sys.traits?.size;
+          const sizeLabels = { tiny: "Tiny", sm: "Small", med: "Medium", lg: "Large", huge: "Huge", grg: "Gargantuan" };
+          if (size && sizeLabels[size]) {
+            actorDetails.push(sizeLabels[size]);
+          }
+        }
+        
+        // HP and AC for all actors
+        const hp = sys.attributes?.hp;
+        if (hp?.max) {
+          const hpCurrent = hp.value ?? hp.max;
+          actorDetails.push(`HP ${hpCurrent}/${hp.max}`);
+        }
+        
+        const ac = sys.attributes?.ac;
+        if (ac?.flat || ac?.value) {
+          actorDetails.push(`AC ${ac.flat || ac.value}`);
+        }
+        
+        // Movement for NPCs
+        const movement = sys.attributes?.movement;
+        if (movement && actorType === "npc") {
+          let speeds = [];
+          if (movement.walk) speeds.push(`${movement.walk} ft`);
+          if (movement.fly) speeds.push(`Fly ${movement.fly}`);
+          if (movement.swim) speeds.push(`Swim ${movement.swim}`);
+          if (movement.burrow) speeds.push(`Burrow ${movement.burrow}`);
+          if (movement.climb) speeds.push(`Climb ${movement.climb}`);
+          if (speeds.length > 0 && speeds.length <= 3) {
+            actorDetails.push(speeds.join(", "));
+          } else if (speeds.length > 0) {
+            actorDetails.push(speeds[0] + (speeds.length > 1 ? "..." : ""));
+          }
+        }
+        
+        const actorDetailsHtml = actorDetails.length 
+          ? `<div style="font-size:0.9em;color:#8cb4d9;margin-top:2px;">${actorDetails.join(" | ")}</div>` 
+          : "";
+        
+        detailsHtml = `
+          <div class="panic-actor-details" style="display:flex;align-items:flex-start;gap:10px;margin-bottom:4px;">
+            <img src="${img}" alt="actor" style="width:38px;height:38px;object-fit:contain;border-radius:6px;border:1.5px solid #bfa046;background:#222;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:1.1em;font-weight:bold;">${entry.name}</div>
+              <div style="font-size:0.95em;color:#bfa046;">${actorType.charAt(0).toUpperCase() + actorType.slice(1)}</div>
+              ${actorDetailsHtml}
+            </div>
+          </div>
+        `;
+      }
+      
       // Build description HTML (for items only, placed after actions)
       let descHtml = "";
       if (entry.type === "Item") {
@@ -1564,6 +1776,33 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
               if (!spellClasses.includes(selectedSpellClass)) return;
             }
           }
+          // If Actor, filter by subtype if set
+          if (type === "Actor" && selectedType === "Actor" && selectedActorSubtype !== "all") {
+            let actorType = doc.type || "";
+            if (actorType !== selectedActorSubtype) return;
+          }
+          // If NPC actor, filter by creature type if set
+          if (type === "Actor" && selectedActorSubtype === "npc" && selectedCreatureType !== "all") {
+            let creatureType = doc.system?.details?.type?.value || "";
+            if (creatureType !== selectedCreatureType) return;
+          }
+          // If NPC actor, filter by CR range if set
+          if (type === "Actor" && selectedActorSubtype === "npc" && selectedCRRange !== "all") {
+            let cr = doc.system?.details?.cr;
+            if (cr === undefined || cr === null) return;
+            const crRanges = {
+              "0": { min: 0, max: 0 },
+              "0.125": { min: 0.125, max: 0.125 },
+              "0.25": { min: 0.25, max: 0.25 },
+              "0.5": { min: 0.5, max: 0.5 },
+              "1-4": { min: 1, max: 4 },
+              "5-10": { min: 5, max: 10 },
+              "11-16": { min: 11, max: 16 },
+              "17+": { min: 17, max: 999 }
+            };
+            const range = crRanges[selectedCRRange];
+            if (!range || cr < range.min || cr > range.max) return;
+          }
           results.push({
             name: doc.name,
             type,
@@ -1673,6 +1912,39 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             return spellClasses.includes(selectedSpellClass);
           });
         }
+      }
+      // If Actor, filter by subtype if set
+      if (selectedType === "Actor" && selectedActorSubtype !== "all") {
+        results = results.filter(r => {
+          let actorType = r.document.type || "";
+          return actorType === selectedActorSubtype;
+        });
+      }
+      // If NPC actor, filter by creature type if set
+      if (selectedActorSubtype === "npc" && selectedCreatureType !== "all") {
+        results = results.filter(r => {
+          let creatureType = r.document.system?.details?.type?.value || "";
+          return creatureType === selectedCreatureType;
+        });
+      }
+      // If NPC actor, filter by CR range if set
+      if (selectedActorSubtype === "npc" && selectedCRRange !== "all") {
+        const crRanges = {
+          "0": { min: 0, max: 0 },
+          "0.125": { min: 0.125, max: 0.125 },
+          "0.25": { min: 0.25, max: 0.25 },
+          "0.5": { min: 0.5, max: 0.5 },
+          "1-4": { min: 1, max: 4 },
+          "5-10": { min: 5, max: 10 },
+          "11-16": { min: 11, max: 16 },
+          "17+": { min: 17, max: 999 }
+        };
+        const range = crRanges[selectedCRRange];
+        results = results.filter(r => {
+          let cr = r.document.system?.details?.cr;
+          if (cr === undefined || cr === null) return false;
+          return range && cr >= range.min && cr <= range.max;
+        });
       }
     }
     await renderResults(results);
