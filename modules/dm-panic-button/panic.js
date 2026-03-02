@@ -1290,22 +1290,22 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
     
-    // Build folder tree structure for journals
-    // Each node: { id, name, sort, children: Map, journals: [] }
-    const buildFolderTree = (entries) => {
-      const root = { id: "__root__", name: "Root", sort: 0, children: new Map(), journals: [] };
-      const noFolder = { id: "__no_folder__", name: "No Folder", sort: Infinity, children: new Map(), journals: [] };
+    // Build folder tree structure for any document type
+    // Each node: { id, name, sort, children: Map, items: [] }
+    const buildFolderTree = (entries, docType) => {
+      const root = { id: "__root__", name: "Root", sort: 0, children: new Map(), items: [] };
+      const noFolder = { id: `__no_folder_${docType}__`, name: "No Folder", sort: Infinity, children: new Map(), items: [] };
       
       // First, build a map of all folders we need
       const folderNodes = new Map();
       
       for (const entry of entries) {
-        if (entry.type !== "Journal") continue;
+        if (entry.type !== docType) continue;
         const doc = entry.document;
         const folder = doc.folder;
         
         if (!folder) {
-          noFolder.journals.push(entry);
+          noFolder.items.push(entry);
           continue;
         }
         
@@ -1326,7 +1326,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
               name: f.name,
               sort: f.sort ?? 0,
               children: new Map(),
-              journals: []
+              items: []
             });
           }
           const node = folderNodes.get(f.id);
@@ -1336,32 +1336,36 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           parentNode = node;
         }
         
-        // Add journal to its direct parent folder
-        parentNode.journals.push(entry);
+        // Add entry to its direct parent folder
+        parentNode.items.push(entry);
       }
       
-      // Add "No Folder" if it has journals
-      if (noFolder.journals.length > 0) {
-        root.children.set("__no_folder__", noFolder);
+      // Add "No Folder" if it has items
+      if (noFolder.items.length > 0) {
+        root.children.set(noFolder.id, noFolder);
       }
       
       return root;
     };
     
-    // Separate journals from other entries
-    const nonJournalEntries = [];
+    // Separate entries by type
+    const otherEntries = [];
     const journalEntries = [];
+    const sceneEntries = [];
     
     for (const entry of list) {
       if (entry.type === "Journal") {
         journalEntries.push(entry);
+      } else if (entry.type === "Scene") {
+        sceneEntries.push(entry);
       } else {
-        nonJournalEntries.push(entry);
+        otherEntries.push(entry);
       }
     }
     
-    // Build the folder tree
-    const folderTree = buildFolderTree(journalEntries);
+    // Build folder trees
+    const journalTree = buildFolderTree(journalEntries, "Journal");
+    const sceneTree = buildFolderTree(sceneEntries, "Scene");
     
     // Helper to render a single entry
     const renderEntry = async (entry) => {
@@ -1927,29 +1931,29 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       return el;
     };
     
-    // Recursive function to render folder tree
-    const renderFolderTree = async (node, depth = 0) => {
+    // Recursive function to render folder tree (generic for any document type)
+    const renderFolderTree = async (node, depth = 0, itemLabel = "item", noFolderPrefix = "__no_folder") => {
       const container = $('<div class="panic-folder-tree"></div>');
       
       // Sort children folders alphabetically ("No Folder" last)
       const sortedChildren = [...node.children.values()].sort((a, b) => {
-        if (a.id === "__no_folder__") return 1;
-        if (b.id === "__no_folder__") return -1;
+        if (a.id.startsWith(noFolderPrefix)) return 1;
+        if (b.id.startsWith(noFolderPrefix)) return -1;
         return a.name.localeCompare(b.name);
       });
       
       for (const childFolder of sortedChildren) {
         const safeFolderId = childFolder.id.replace(/[^a-zA-Z0-9]/g, '_');
         const hasChildren = childFolder.children.size > 0;
-        const hasJournals = childFolder.journals.length > 0;
+        const hasItems = childFolder.items.length > 0;
         
-        // Count total journals in this folder and all subfolders
-        const countJournals = (n) => {
-          let count = n.journals.length;
-          for (const c of n.children.values()) count += countJournals(c);
+        // Count total items in this folder and all subfolders
+        const countItems = (n) => {
+          let count = n.items.length;
+          for (const c of n.children.values()) count += countItems(c);
           return count;
         };
-        const totalJournals = countJournals(childFolder);
+        const totalItems = countItems(childFolder);
         
         // Create folder header with indentation based on depth
         const indent = depth * 16;
@@ -1957,7 +1961,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           <div class="panic-folder-header" data-folder-id="${safeFolderId}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;padding-left:${10 + indent}px;margin:4px 0 2px 0;background:linear-gradient(90deg,rgba(191,160,70,${0.25 - depth * 0.05}) 0%,transparent 100%);border-left:3px solid #bfa046;cursor:pointer;user-select:none;">
             <span class="panic-folder-arrow" style="color:#bfa046;font-size:0.8em;">▶</span>
             <span style="font-size:${1.05 - depth * 0.05}em;font-weight:bold;color:#bfa046;">📁 ${childFolder.name}</span>
-            <span style="font-size:0.85em;color:#888;margin-left:auto;">${totalJournals} ${totalJournals === 1 ? 'journal' : 'journals'}</span>
+            <span style="font-size:0.85em;color:#888;margin-left:auto;">${totalItems} ${totalItems === 1 ? itemLabel : itemLabel + 's'}</span>
           </div>
         `);
         
@@ -1966,19 +1970,19 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         
         // Add subfolders first (recursively)
         if (hasChildren) {
-          const subfolderContainer = await renderFolderTree(childFolder, depth + 1);
+          const subfolderContainer = await renderFolderTree(childFolder, depth + 1, itemLabel, noFolderPrefix);
           folderContents.append(subfolderContainer);
         }
         
-        // Add journals in this folder
-        if (hasJournals) {
-          const journalContainer = $(`<div class="panic-folder-journals" style="padding-left:${indent + 16}px;"></div>`);
-          childFolder.journals.sort((a, b) => a.name.localeCompare(b.name));
-          for (const entry of childFolder.journals) {
+        // Add items in this folder
+        if (hasItems) {
+          const itemContainer = $(`<div class="panic-folder-items" style="padding-left:${indent + 16}px;"></div>`);
+          childFolder.items.sort((a, b) => a.name.localeCompare(b.name));
+          for (const entry of childFolder.items) {
             const el = await renderEntry(entry);
-            journalContainer.append(el);
+            itemContainer.append(el);
           }
-          folderContents.append(journalContainer);
+          folderContents.append(itemContainer);
         }
         
         // Toggle folder collapse/expand
@@ -2003,16 +2007,26 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       return container;
     };
     
-    // Render non-journal entries first
-    for (const entry of nonJournalEntries) {
+    // Render other entries first (Items, Actors, etc.)
+    for (const entry of otherEntries) {
       const el = await renderEntry(entry);
       resultsDiv.append(el);
     }
     
+    // Render scene folder tree
+    if (sceneTree.children.size > 0) {
+      const sceneHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">🗺 Scenes</div>`);
+      resultsDiv.append(sceneHeader);
+      const sceneContainer = await renderFolderTree(sceneTree, 0, "scene", "__no_folder_Scene");
+      resultsDiv.append(sceneContainer);
+    }
+    
     // Render journal folder tree
-    if (folderTree.children.size > 0) {
-      const treeContainer = await renderFolderTree(folderTree, 0);
-      resultsDiv.append(treeContainer);
+    if (journalTree.children.size > 0) {
+      const journalHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">📖 Journals</div>`);
+      resultsDiv.append(journalHeader);
+      const journalContainer = await renderFolderTree(journalTree, 0, "journal", "__no_folder_Journal");
+      resultsDiv.append(journalContainer);
     }
   }
 
