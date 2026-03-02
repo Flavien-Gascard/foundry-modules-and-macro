@@ -167,8 +167,21 @@ Hooks.on("renderTokenHUD", (hud, html, token) => {
       <i class="fas fa-fire"></i>
     </button>`
   );
-  // Custom style for visibility and order
-  panicBtn.css({ order: -100, marginBottom: "4px", background: "#fff", color: "#c00", border: "2px solid #c00" });
+  // Custom style for visibility and order - fades when not hovered
+  panicBtn.css({ 
+    order: -100, 
+    marginBottom: "4px", 
+    background: "#fff", 
+    color: "#c00", 
+    border: "2px solid #c00",
+    opacity: 0.4,
+    transition: "opacity 0.2s ease"
+  });
+  panicBtn.on("mouseenter", function() {
+    $(this).css("opacity", 1);
+  }).on("mouseleave", function() {
+    $(this).css("opacity", 0.4);
+  });
   panicBtn.on("click", () => {
     const existing = Object.values(ui.windows)
       .find(w => w instanceof globalThis.DMPanicButton);
@@ -662,6 +675,18 @@ async function runContextAction(action, entry) {
 ================================================= */
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
+    // Make the app fade when not hovered
+    const appElement = html.closest(".app");
+    appElement.css({
+      opacity: 0.4,
+      transition: "opacity 0.3s ease"
+    });
+    appElement.on("mouseenter", function() {
+      $(this).css("opacity", 1);
+    }).on("mouseleave", function() {
+      $(this).css("opacity", 0.4);
+    });
+    
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
       const style = document.createElement('style');
@@ -1290,22 +1315,22 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     resultsDiv.empty();
     const actorSelected = getSelectedActor();
     
-    // Build folder tree structure for journals
-    // Each node: { id, name, sort, children: Map, journals: [] }
-    const buildFolderTree = (entries) => {
-      const root = { id: "__root__", name: "Root", sort: 0, children: new Map(), journals: [] };
-      const noFolder = { id: "__no_folder__", name: "No Folder", sort: Infinity, children: new Map(), journals: [] };
+    // Build folder tree structure for any document type
+    // Each node: { id, name, sort, children: Map, items: [] }
+    const buildFolderTree = (entries, docType) => {
+      const root = { id: "__root__", name: "Root", sort: 0, children: new Map(), items: [] };
+      const noFolder = { id: `__no_folder_${docType}__`, name: "No Folder", sort: Infinity, children: new Map(), items: [] };
       
       // First, build a map of all folders we need
       const folderNodes = new Map();
       
       for (const entry of entries) {
-        if (entry.type !== "Journal") continue;
+        if (entry.type !== docType) continue;
         const doc = entry.document;
         const folder = doc.folder;
         
         if (!folder) {
-          noFolder.journals.push(entry);
+          noFolder.items.push(entry);
           continue;
         }
         
@@ -1326,7 +1351,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
               name: f.name,
               sort: f.sort ?? 0,
               children: new Map(),
-              journals: []
+              items: []
             });
           }
           const node = folderNodes.get(f.id);
@@ -1336,32 +1361,43 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           parentNode = node;
         }
         
-        // Add journal to its direct parent folder
-        parentNode.journals.push(entry);
+        // Add entry to its direct parent folder
+        parentNode.items.push(entry);
       }
       
-      // Add "No Folder" if it has journals
-      if (noFolder.journals.length > 0) {
-        root.children.set("__no_folder__", noFolder);
+      // Add "No Folder" if it has items
+      if (noFolder.items.length > 0) {
+        root.children.set(noFolder.id, noFolder);
       }
       
       return root;
     };
     
-    // Separate journals from other entries
-    const nonJournalEntries = [];
+    // Separate entries by type
+    const otherEntries = [];
     const journalEntries = [];
+    const sceneEntries = [];
+    const macroEntries = [];
+    const rollTableEntries = [];
     
     for (const entry of list) {
       if (entry.type === "Journal") {
         journalEntries.push(entry);
+      } else if (entry.type === "Scene") {
+        sceneEntries.push(entry);
+      } else if (entry.type === "Macro") {
+        macroEntries.push(entry);
+      } else if (entry.type === "RollTable") {
+        rollTableEntries.push(entry);
       } else {
-        nonJournalEntries.push(entry);
+        otherEntries.push(entry);
       }
     }
     
-    // Build the folder tree
-    const folderTree = buildFolderTree(journalEntries);
+    // Build folder trees
+    const journalTree = buildFolderTree(journalEntries, "Journal");
+    const sceneTree = buildFolderTree(sceneEntries, "Scene");
+    const rollTableTree = buildFolderTree(rollTableEntries, "RollTable");
     
     // Helper to render a single entry
     const renderEntry = async (entry) => {
@@ -1927,30 +1963,29 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       return el;
     };
     
-    // Recursive function to render folder tree
-    const renderFolderTree = async (node, depth = 0) => {
+    // Recursive function to render folder tree (generic for any document type)
+    const renderFolderTree = async (node, depth = 0, itemLabel = "item", noFolderPrefix = "__no_folder") => {
       const container = $('<div class="panic-folder-tree"></div>');
       
-      // Sort children folders by sort order, then name ("No Folder" last)
+      // Sort children folders alphabetically ("No Folder" last)
       const sortedChildren = [...node.children.values()].sort((a, b) => {
-        if (a.id === "__no_folder__") return 1;
-        if (b.id === "__no_folder__") return -1;
-        if (a.sort !== b.sort) return a.sort - b.sort;
+        if (a.id.startsWith(noFolderPrefix)) return 1;
+        if (b.id.startsWith(noFolderPrefix)) return -1;
         return a.name.localeCompare(b.name);
       });
       
       for (const childFolder of sortedChildren) {
         const safeFolderId = childFolder.id.replace(/[^a-zA-Z0-9]/g, '_');
         const hasChildren = childFolder.children.size > 0;
-        const hasJournals = childFolder.journals.length > 0;
+        const hasItems = childFolder.items.length > 0;
         
-        // Count total journals in this folder and all subfolders
-        const countJournals = (n) => {
-          let count = n.journals.length;
-          for (const c of n.children.values()) count += countJournals(c);
+        // Count total items in this folder and all subfolders
+        const countItems = (n) => {
+          let count = n.items.length;
+          for (const c of n.children.values()) count += countItems(c);
           return count;
         };
-        const totalJournals = countJournals(childFolder);
+        const totalItems = countItems(childFolder);
         
         // Create folder header with indentation based on depth
         const indent = depth * 16;
@@ -1958,7 +1993,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           <div class="panic-folder-header" data-folder-id="${safeFolderId}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;padding-left:${10 + indent}px;margin:4px 0 2px 0;background:linear-gradient(90deg,rgba(191,160,70,${0.25 - depth * 0.05}) 0%,transparent 100%);border-left:3px solid #bfa046;cursor:pointer;user-select:none;">
             <span class="panic-folder-arrow" style="color:#bfa046;font-size:0.8em;">▶</span>
             <span style="font-size:${1.05 - depth * 0.05}em;font-weight:bold;color:#bfa046;">📁 ${childFolder.name}</span>
-            <span style="font-size:0.85em;color:#888;margin-left:auto;">${totalJournals} ${totalJournals === 1 ? 'journal' : 'journals'}</span>
+            <span style="font-size:0.85em;color:#888;margin-left:auto;">${totalItems} ${totalItems === 1 ? itemLabel : itemLabel + 's'}</span>
           </div>
         `);
         
@@ -1967,19 +2002,19 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         
         // Add subfolders first (recursively)
         if (hasChildren) {
-          const subfolderContainer = await renderFolderTree(childFolder, depth + 1);
+          const subfolderContainer = await renderFolderTree(childFolder, depth + 1, itemLabel, noFolderPrefix);
           folderContents.append(subfolderContainer);
         }
         
-        // Add journals in this folder
-        if (hasJournals) {
-          const journalContainer = $(`<div class="panic-folder-journals" style="padding-left:${indent + 16}px;"></div>`);
-          childFolder.journals.sort((a, b) => a.name.localeCompare(b.name));
-          for (const entry of childFolder.journals) {
+        // Add items in this folder
+        if (hasItems) {
+          const itemContainer = $(`<div class="panic-folder-items" style="padding-left:${indent + 16}px;"></div>`);
+          childFolder.items.sort((a, b) => a.name.localeCompare(b.name));
+          for (const entry of childFolder.items) {
             const el = await renderEntry(entry);
-            journalContainer.append(el);
+            itemContainer.append(el);
           }
-          folderContents.append(journalContainer);
+          folderContents.append(itemContainer);
         }
         
         // Toggle folder collapse/expand
@@ -2004,16 +2039,99 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       return container;
     };
     
-    // Render non-journal entries first
-    for (const entry of nonJournalEntries) {
+    // Render other entries first (Items, Actors, etc.)
+    for (const entry of otherEntries) {
       const el = await renderEntry(entry);
       resultsDiv.append(el);
     }
     
+    // Render scene folder tree
+    if (sceneTree.children.size > 0) {
+      const sceneHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">🗺 Scenes</div>`);
+      resultsDiv.append(sceneHeader);
+      const sceneContainer = await renderFolderTree(sceneTree, 0, "scene", "__no_folder_Scene");
+      resultsDiv.append(sceneContainer);
+    }
+    
     // Render journal folder tree
-    if (folderTree.children.size > 0) {
-      const treeContainer = await renderFolderTree(folderTree, 0);
-      resultsDiv.append(treeContainer);
+    if (journalTree.children.size > 0) {
+      const journalHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">📖 Journals</div>`);
+      resultsDiv.append(journalHeader);
+      const journalContainer = await renderFolderTree(journalTree, 0, "journal", "__no_folder_Journal");
+      resultsDiv.append(journalContainer);
+    }
+    
+    // Render roll table folder tree
+    if (rollTableTree.children.size > 0) {
+      const rollTableHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">🎲 Roll Tables</div>`);
+      resultsDiv.append(rollTableHeader);
+      const rollTableContainer = await renderFolderTree(rollTableTree, 0, "table", "__no_folder_RollTable");
+      resultsDiv.append(rollTableContainer);
+    }
+    
+    // Render macro hotbar (all 5 pages)
+    if (macroEntries.length > 0) {
+      const hotbar = game.user.hotbar || {};
+      const macroHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">⚡ Macro Hotbar</div>`);
+      resultsDiv.append(macroHeader);
+      
+      // Create hotbar container
+      const hotbarContainer = $('<div class="panic-macro-hotbar"></div>');
+      
+      for (let page = 1; page <= 5; page++) {
+        // Page label
+        const pageLabel = $(`<div style="font-size:0.9em;font-weight:bold;color:#bfa046;margin:${page > 1 ? '8px' : '4px'} 0 6px 0;">Page ${page}</div>`);
+        hotbarContainer.append(pageLabel);
+        
+        // Create grid for 10 slots (2 rows of 5)
+        const slotGrid = $(`<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;"></div>`);
+        
+        for (let slot = 1; slot <= 10; slot++) {
+          const globalSlot = (page - 1) * 10 + slot;
+          const macroId = hotbar[globalSlot];
+          const macro = macroId ? game.macros.get(macroId) : null;
+          
+          const slotEl = $(`
+            <div class="panic-hotbar-slot" data-slot="${globalSlot}" style="display:flex;flex-direction:column;align-items:center;padding:6px;background:rgba(0,0,0,0.3);border:1px solid ${macro ? '#bfa046' : '#444'};border-radius:6px;min-height:60px;cursor:${macro ? 'pointer' : 'default'};">
+              <div style="font-size:0.7em;color:#888;margin-bottom:4px;">${slot}</div>
+              ${macro 
+                ? `<img src="${macro.img || 'icons/svg/dice-target.svg'}" style="width:32px;height:32px;border-radius:4px;border:1px solid #666;">
+                   <div style="font-size:0.75em;color:#ccc;margin-top:4px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;" title="${macro.name}">${macro.name}</div>`
+                : `<div style="width:32px;height:32px;border:1px dashed #555;border-radius:4px;"></div>
+                   <div style="font-size:0.7em;color:#555;margin-top:4px;">Empty</div>`
+              }
+            </div>
+          `);
+          
+          // Click to execute macro
+          if (macro) {
+            slotEl.on("click", async function(ev) {
+              ev.stopPropagation();
+              try {
+                await macro.execute();
+              } catch (err) {
+                ui.notifications.error(`Failed to execute macro: ${err.message}`);
+              }
+            });
+            slotEl.on("mouseenter", function() {
+              $(this).css("border-color", "#fff700");
+            }).on("mouseleave", function() {
+              $(this).css("border-color", "#bfa046");
+            });
+          }
+          
+          slotGrid.append(slotEl);
+        }
+        
+        hotbarContainer.append(slotGrid);
+        
+        // Add horizontal rule between pages (not after the last one)
+        if (page < 5) {
+          hotbarContainer.append($(`<hr style="border:none;border-top:1px solid #555;margin:10px 0;">`));
+        }
+      }
+      
+      resultsDiv.append(hotbarContainer);
     }
   }
 
