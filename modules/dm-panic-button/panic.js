@@ -167,8 +167,21 @@ Hooks.on("renderTokenHUD", (hud, html, token) => {
       <i class="fas fa-fire"></i>
     </button>`
   );
-  // Custom style for visibility and order
-  panicBtn.css({ order: -100, marginBottom: "4px", background: "#fff", color: "#c00", border: "2px solid #c00" });
+  // Custom style for visibility and order - fades when not hovered
+  panicBtn.css({ 
+    order: -100, 
+    marginBottom: "4px", 
+    background: "#fff", 
+    color: "#c00", 
+    border: "2px solid #c00",
+    opacity: 0.4,
+    transition: "opacity 0.2s ease"
+  });
+  panicBtn.on("mouseenter", function() {
+    $(this).css("opacity", 1);
+  }).on("mouseleave", function() {
+    $(this).css("opacity", 0.4);
+  });
   panicBtn.on("click", () => {
     const existing = Object.values(ui.windows)
       .find(w => w instanceof globalThis.DMPanicButton);
@@ -662,6 +675,18 @@ async function runContextAction(action, entry) {
 ================================================= */
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
+    // Make the app fade when not hovered
+    const appElement = html.closest(".app");
+    appElement.css({
+      opacity: 0.4,
+      transition: "opacity 0.3s ease"
+    });
+    appElement.on("mouseenter", function() {
+      $(this).css("opacity", 1);
+    }).on("mouseleave", function() {
+      $(this).css("opacity", 0.4);
+    });
+    
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
       const style = document.createElement('style');
@@ -1352,12 +1377,18 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     const otherEntries = [];
     const journalEntries = [];
     const sceneEntries = [];
+    const macroEntries = [];
+    const rollTableEntries = [];
     
     for (const entry of list) {
       if (entry.type === "Journal") {
         journalEntries.push(entry);
       } else if (entry.type === "Scene") {
         sceneEntries.push(entry);
+      } else if (entry.type === "Macro") {
+        macroEntries.push(entry);
+      } else if (entry.type === "RollTable") {
+        rollTableEntries.push(entry);
       } else {
         otherEntries.push(entry);
       }
@@ -1366,6 +1397,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     // Build folder trees
     const journalTree = buildFolderTree(journalEntries, "Journal");
     const sceneTree = buildFolderTree(sceneEntries, "Scene");
+    const rollTableTree = buildFolderTree(rollTableEntries, "RollTable");
     
     // Helper to render a single entry
     const renderEntry = async (entry) => {
@@ -2027,6 +2059,79 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       resultsDiv.append(journalHeader);
       const journalContainer = await renderFolderTree(journalTree, 0, "journal", "__no_folder_Journal");
       resultsDiv.append(journalContainer);
+    }
+    
+    // Render roll table folder tree
+    if (rollTableTree.children.size > 0) {
+      const rollTableHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">🎲 Roll Tables</div>`);
+      resultsDiv.append(rollTableHeader);
+      const rollTableContainer = await renderFolderTree(rollTableTree, 0, "table", "__no_folder_RollTable");
+      resultsDiv.append(rollTableContainer);
+    }
+    
+    // Render macro hotbar (all 5 pages)
+    if (macroEntries.length > 0) {
+      const hotbar = game.user.hotbar || {};
+      const macroHeader = $(`<div style="margin:12px 0 6px 0;padding:6px 10px;font-size:1.1em;font-weight:bold;color:#bfa046;border-bottom:1px solid #bfa046;">⚡ Macro Hotbar</div>`);
+      resultsDiv.append(macroHeader);
+      
+      // Create hotbar container
+      const hotbarContainer = $('<div class="panic-macro-hotbar"></div>');
+      
+      for (let page = 1; page <= 5; page++) {
+        // Page label
+        const pageLabel = $(`<div style="font-size:0.9em;font-weight:bold;color:#bfa046;margin:${page > 1 ? '8px' : '4px'} 0 6px 0;">Page ${page}</div>`);
+        hotbarContainer.append(pageLabel);
+        
+        // Create grid for 10 slots (2 rows of 5)
+        const slotGrid = $(`<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;"></div>`);
+        
+        for (let slot = 1; slot <= 10; slot++) {
+          const globalSlot = (page - 1) * 10 + slot;
+          const macroId = hotbar[globalSlot];
+          const macro = macroId ? game.macros.get(macroId) : null;
+          
+          const slotEl = $(`
+            <div class="panic-hotbar-slot" data-slot="${globalSlot}" style="display:flex;flex-direction:column;align-items:center;padding:6px;background:rgba(0,0,0,0.3);border:1px solid ${macro ? '#bfa046' : '#444'};border-radius:6px;min-height:60px;cursor:${macro ? 'pointer' : 'default'};">
+              <div style="font-size:0.7em;color:#888;margin-bottom:4px;">${slot}</div>
+              ${macro 
+                ? `<img src="${macro.img || 'icons/svg/dice-target.svg'}" style="width:32px;height:32px;border-radius:4px;border:1px solid #666;">
+                   <div style="font-size:0.75em;color:#ccc;margin-top:4px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;" title="${macro.name}">${macro.name}</div>`
+                : `<div style="width:32px;height:32px;border:1px dashed #555;border-radius:4px;"></div>
+                   <div style="font-size:0.7em;color:#555;margin-top:4px;">Empty</div>`
+              }
+            </div>
+          `);
+          
+          // Click to execute macro
+          if (macro) {
+            slotEl.on("click", async function(ev) {
+              ev.stopPropagation();
+              try {
+                await macro.execute();
+              } catch (err) {
+                ui.notifications.error(`Failed to execute macro: ${err.message}`);
+              }
+            });
+            slotEl.on("mouseenter", function() {
+              $(this).css("border-color", "#fff700");
+            }).on("mouseleave", function() {
+              $(this).css("border-color", "#bfa046");
+            });
+          }
+          
+          slotGrid.append(slotEl);
+        }
+        
+        hotbarContainer.append(slotGrid);
+        
+        // Add horizontal rule between pages (not after the last one)
+        if (page < 5) {
+          hotbarContainer.append($(`<hr style="border:none;border-top:1px solid #555;margin:10px 0;">`));
+        }
+      }
+      
+      resultsDiv.append(hotbarContainer);
     }
   }
 
