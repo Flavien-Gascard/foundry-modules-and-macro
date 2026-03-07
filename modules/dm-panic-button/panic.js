@@ -271,6 +271,7 @@ Hooks.once("setup", () => {
 ================================================= */
 
 let pendingSpawnEntry = null;
+let placementPreview = null;
 
 
 /* =================================================
@@ -279,6 +280,80 @@ let pendingSpawnEntry = null;
 
 function getSelectedActor() {
   return canvas.tokens.controlled[0]?.actor ?? null;
+}
+
+// Converts a pointer event to snapped world coordinates (V13+ safe)
+function getSnappedWorldPoint(event) {
+  const world = canvas.stage.worldTransform.applyInverse(event.data.global);
+  let snapped = { x: world.x, y: world.y };
+  try {
+    if (canvas?.grid?.getSnappedPoint) {
+      const snapResult = canvas.grid.getSnappedPoint({ x: world.x, y: world.y });
+      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
+        snapped = snapResult;
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof TypeError)) {
+      console.error("DM Panic Button: getSnappedPoint failed", err);
+    }
+  }
+  return snapped;
+}
+
+
+function getDocumentDescription(doc) {
+  if (doc.system?.description?.value) return doc.system.description.value;
+  if (doc.content) return doc.content;
+  if (doc.pages?.size > 0) {
+    const firstPage = doc.pages.contents[0];
+    return firstPage?.text?.content || firstPage?.content || "";
+  }
+  if (doc.description) return doc.description;
+  return `<i>No description available for ${doc.name}</i>`;
+}
+
+
+function showPlacementPreview({ img = "", size = 1 } = {}) {
+  hidePlacementPreview();
+  const px = canvas.grid.size * size;
+  const container = new PIXI.Container();
+  container.eventMode = "none";
+
+  const gfx = new PIXI.Graphics();
+  gfx.lineStyle(2, 0x00ff88, 0.9);
+  gfx.beginFill(0x00ff88, 0.15);
+  gfx.drawRect(0, 0, px, px);
+  gfx.endFill();
+  container.addChild(gfx);
+
+  if (img) {
+    try {
+      const sprite = new PIXI.Sprite(PIXI.Texture.from(img));
+      sprite.width = px;
+      sprite.height = px;
+      sprite.alpha = 0.5;
+      container.addChild(sprite);
+    } catch (e) { /* ignore texture errors */ }
+  }
+
+  canvas.tokens.addChild(container);
+
+  const onMove = (event) => {
+    const snapped = getSnappedWorldPoint(event);
+    container.position.set(snapped.x, snapped.y);
+  };
+  canvas.stage.on("pointermove", onMove);
+  container._dmPanicMoveHandler = onMove;
+  placementPreview = container;
+}
+
+
+function hidePlacementPreview() {
+  if (!placementPreview) return;
+  canvas.stage.off("pointermove", placementPreview._dmPanicMoveHandler);
+  placementPreview.destroy({ children: true });
+  placementPreview = null;
 }
 
 
@@ -354,6 +429,12 @@ function startSpawnPlacement(entry) {
 
   pendingSpawnEntry = entry;
 
+  const actor = entry.document;
+  showPlacementPreview({
+    img: actor?.prototypeToken?.texture?.src || actor?.img || "",
+    size: actor?.prototypeToken?.width ?? 1
+  });
+
   ui.notifications.info(
     "Click on the map to place the token."
   );
@@ -374,34 +455,14 @@ async function handleSpawnClick(event) {
 
   const tokenDoc = await actor.getTokenDocument();
 
-  const world = canvas.stage.worldTransform.applyInverse(
-    event.data.global
-  );
-
-  // ✅ V13+ safe grid snapping
-  let snapped = { x: world.x, y: world.y };
-  try {
-    if (canvas?.grid?.getSnappedPoint) {
-      const snapArg = { x: world.x, y: world.y };
-      const snapResult = canvas.grid.getSnappedPoint(snapArg);
-      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
-        snapped = snapResult;
-      } else {
-        // fallback silently if snapResult is invalid
-      }
-    }
-  } catch (err) {
-    // Only log if not a known harmless error
-    if (!(err instanceof TypeError)) {
-      console.error("DM Panic Button: getSnappedPoint failed", err);
-    }
-    // fallback to unsnapped coordinates
-  }
+  const snapped = getSnappedWorldPoint(event);
 
   tokenDoc.updateSource({
     x: snapped.x,
     y: snapped.y
   });
+
+  hidePlacementPreview();
 
   await scene.createEmbeddedDocuments("Token", [
     tokenDoc.toObject()
@@ -420,6 +481,7 @@ async function handleSpawnClick(event) {
 function startItemPlacement(entry) {
   console.log("DM Panic Button: startItemPlacement called", entry);
   pendingSpawnEntry = entry;
+  showPlacementPreview({ img: entry.document?.img || "", size: 0.5 });
   ui.notifications.info("Click on the map to place the item as loot.");
   canvas.stage.once("pointerdown", handleItemPlaceClick);
 }
@@ -444,21 +506,7 @@ async function handleItemPlaceClick(event) {
   console.log("DM Panic Button: handleItemPlaceClick item", item);
   console.log("DM Panic Button: handleItemPlaceClick scene", scene);
 
-  const world = canvas.stage.worldTransform.applyInverse(event.data.global);
-  let snapped = { x: world.x, y: world.y };
-  try {
-    if (canvas?.grid?.getSnappedPoint) {
-      const snapArg = { x: world.x, y: world.y };
-      const snapResult = canvas.grid.getSnappedPoint(snapArg);
-      if (snapResult && typeof snapResult.x === "number" && typeof snapResult.y === "number") {
-        snapped = snapResult;
-      }
-    }
-  } catch (err) {
-    if (!(err instanceof TypeError)) {
-      console.error("DM Panic Button: getSnappedPoint failed", err);
-    }
-  }
+  const snapped = getSnappedWorldPoint(event);
 
   // Convert spells to scrolls for loot placement
   let lootItem = item;
@@ -500,6 +548,7 @@ async function handleItemPlaceClick(event) {
   const actor = await Actor.create(lootData);
   if (!actor) {
     ui.notifications.error("Failed to create loot actor.");
+    hidePlacementPreview();
     pendingSpawnEntry = null;
     return;
   }
@@ -532,6 +581,7 @@ async function handleItemPlaceClick(event) {
       priority: 0
     }
   });
+  hidePlacementPreview();
   const createdTokens = await scene.createEmbeddedDocuments("Token", [tokenDoc.toObject()]);
   ui.notifications.info(`Loot '${lootItem.name}' placed.`);
 
@@ -567,6 +617,7 @@ async function handleItemPlaceClick(event) {
 async function runContextAction(action, entry) {
 
   console.log("PANIC ACTION:", action, entry);  // cancel placement if another action used
+  hidePlacementPreview();
   pendingSpawnEntry = null;
 
   const actor = getSelectedActor();
@@ -582,26 +633,8 @@ async function runContextAction(action, entry) {
 
     case "chat": {
       // Post the document's description to chat with working roll macros
-      let description = "";
-      
-      // Try to get description from various document types
-      if (doc.system?.description?.value) {
-        description = doc.system.description.value; // Items, Spells, Features
-      } else if (doc.content) {
-        description = doc.content; // Journal entries (page content)
-      } else if (doc.pages?.size > 0) {
-        // Journal with pages - get first page content
-        const firstPage = doc.pages.contents[0];
-        description = firstPage?.text?.content || firstPage?.content || "";
-      } else if (doc.description) {
-        description = doc.description; // Actors, some other docs
-      }
-      
-      // Fallback to name if no description found
-      if (!description || description.trim() === "") {
-        description = `<i>No description available for ${doc.name}</i>`;
-      }
-      
+      const description = getDocumentDescription(doc);
+
       // Enrich the HTML to make [[/attack]], [[/damage]], etc. work
       // For Items, we need to provide rollData and the item as context
       let enrichedDescription = description;
@@ -667,6 +700,13 @@ async function runContextAction(action, entry) {
       await scene.activate();
       break;
     }
+
+    case "roll-table": {
+      const table = game.tables.get(doc.id);
+      if (!table) return;
+      await table.draw();
+      break;
+    }
   }
 }
 
@@ -719,6 +759,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           color: #222 !important;
           border-color: #bbb !important;
         }
+        #dm-panic-button .window-content {
+          overflow: hidden !important;
+        }
       `;
       document.head.appendChild(style);
     }
@@ -759,6 +802,79 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   let selectedActorSubtype = "all"; // npc, character, vehicle, etc.
   let selectedCreatureType = "all"; // dragon, humanoid, beast, etc.
   let selectedCRRange = "all"; // CR range for NPCs
+
+  // ── CR range lookup (shared by pills + matchesFilters) ──────────────────
+  const CR_RANGES = {
+    "0":     { min: 0,     max: 0     },
+    "0.125": { min: 0.125, max: 0.125 },
+    "0.25":  { min: 0.25,  max: 0.25  },
+    "0.5":   { min: 0.5,   max: 0.5   },
+    "1-4":   { min: 1,     max: 4     },
+    "5-10":  { min: 5,     max: 10    },
+    "11-16": { min: 11,    max: 16    },
+    "17+":   { min: 17,    max: 999   }
+  };
+
+  // ── Renders sub-subtype pill row into #panic-subsubtype-container ────────
+  function renderSubSubtypePills(subtype, { allLabel = "All Types", getValue = i => i.system?.type?.value || "", sort = false } = {}) {
+    const items = game.items.contents.filter(i => i.type === subtype);
+    let values = [...new Set(items.map(getValue))].filter(v => v !== "" && v !== undefined && v !== null);
+    if (sort) values = values.sort((a, b) => a - b);
+    if (!values.length) return;
+
+    let pillHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
+    pillHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">${allLabel}</button>`;
+    values.forEach(v => {
+      const label = getSubSubtypeLabel("Item", subtype, v);
+      pillHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${v}">${label}</button>`;
+    });
+    pillHtml += `</div>`;
+
+    html.find("#panic-subsubtype-container").html(pillHtml);
+    html.find(".panic-subsubtype-btn").on("click", function() {
+      const clicked = $(this).data("subsubtype");
+      selectedItemSubSubtype = selectedItemSubSubtype === clicked ? "all" : clicked;
+      updateCategoryMenu();
+      doSearch();
+    });
+    html.find('.panic-subsubtype-btn').removeClass('selected');
+    html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
+  }
+
+  // ── Single source-of-truth predicate for all active filter state ─────────
+  function matchesFilters(doc, type) {
+    // Item subtype
+    if (type === "Item" && selectedItemSubtype !== "all") {
+      if ((doc.type || "") !== selectedItemSubtype) return false;
+    }
+    // Item sub-subtype (weapon / feat / consumable / equipment / tool / loot / container all use system.type.value)
+    const TYPED_SUBTYPES = ["weapon", "feat", "consumable", "equipment", "tool", "loot", "container"];
+    if (type === "Item" && TYPED_SUBTYPES.includes(selectedItemSubtype) && selectedItemSubSubtype !== "all") {
+      if ((doc.system?.type?.value || "") !== selectedItemSubSubtype) return false;
+    }
+    // Spell filters
+    if (type === "Item" && selectedItemSubtype === "spell") {
+      if (selectedItemSubSubtype !== "all" && String(doc.system?.level) !== String(selectedItemSubSubtype)) return false;
+      if (selectedSpellSchool !== "all" && (doc.system?.school || "") !== selectedSpellSchool) return false;
+      if (selectedSpellClass !== "all" && !getSpellClasses(doc).includes(selectedSpellClass)) return false;
+    }
+    // Actor subtype
+    if (type === "Actor" && selectedActorSubtype !== "all") {
+      if ((doc.type || "") !== selectedActorSubtype) return false;
+    }
+    // NPC creature type
+    if (type === "Actor" && selectedActorSubtype === "npc" && selectedCreatureType !== "all") {
+      if ((doc.system?.details?.type?.value || "") !== selectedCreatureType) return false;
+    }
+    // NPC CR range
+    if (type === "Actor" && selectedActorSubtype === "npc" && selectedCRRange !== "all") {
+      const cr = doc.system?.details?.cr;
+      if (cr === undefined || cr === null) return false;
+      const range = CR_RANGES[selectedCRRange];
+      if (!range || cr < range.min || cr > range.max) return false;
+    }
+    return true;
+  }
 
   function updateCategoryMenu() {
     html.find(".panic-category-btn").each(function() {
@@ -804,202 +920,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         html.find(`.panic-subtype-btn[data-subtype='${selectedItemSubtype}']`).addClass('selected');
       }
 
-      // Show sub-subtype pills if "weapon" is selected (for martialM, martialR, simpleM, simpleR, natural, etc.)
-      if (selectedItemSubtype === "weapon") {
-        let weaponItems = allItems.filter(i => i.type === "weapon");
-        let subSubtypes = [...new Set(weaponItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (subSubtypes.length) {
-          let subSubtypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All</button>`;
-          subSubtypes.forEach(sst => {
-            // Get friendly label from filter-types config
-            const label = getSubSubtypeLabel("Item", "weapon", sst);
-            subSubtypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${sst}">${label}</button>`;
-          });
-          subSubtypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(subSubtypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedSubSubtype = $(this).data("subsubtype");
-            // Toggle logic
-            if (selectedItemSubSubtype === clickedSubSubtype) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedSubSubtype;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-      
-      // Show sub-subtype pills if "feat" is selected (for class, monster, race, feat, etc.)
-      if (selectedItemSubtype === "feat") {
-        let featItems = allItems.filter(i => i.type === "feat");
-        let featTypes = [...new Set(featItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (featTypes.length) {
-          let featTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          featTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          featTypes.forEach(ft => {
-            const label = getSubSubtypeLabel("Item", "feat", ft);
-            featTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ft}">${label}</button>`;
-          });
-          featTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(featTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedFeatType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedFeatType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedFeatType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-      
-      // Show sub-subtype pills if "consumable" is selected (for potion, poison, scroll, etc.)
-      if (selectedItemSubtype === "consumable") {
-        let consumableItems = allItems.filter(i => i.type === "consumable");
-        let consumableTypes = [...new Set(consumableItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (consumableTypes.length) {
-          let consumableTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          consumableTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          consumableTypes.forEach(ct => {
-            const label = getSubSubtypeLabel("Item", "consumable", ct);
-            consumableTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ct}">${label}</button>`;
-          });
-          consumableTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(consumableTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedConsumableType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedConsumableType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedConsumableType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-      
-      // Show sub-subtype pills if "equipment" is selected (for ring, wondrous, armor, etc.)
-      if (selectedItemSubtype === "equipment") {
-        let equipmentItems = allItems.filter(i => i.type === "equipment");
-        let equipmentTypes = [...new Set(equipmentItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (equipmentTypes.length) {
-          let equipmentTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          equipmentTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          equipmentTypes.forEach(et => {
-            const label = getSubSubtypeLabel("Item", "equipment", et);
-            equipmentTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${et}">${label}</button>`;
-          });
-          equipmentTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(equipmentTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedEquipmentType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedEquipmentType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedEquipmentType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-      
-      // Show sub-subtype pills if "tool" is selected (for artisan, gaming, musical, vehicle)
-      if (selectedItemSubtype === "tool") {
-        let toolItems = allItems.filter(i => i.type === "tool");
-        let toolTypes = [...new Set(toolItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (toolTypes.length) {
-          let toolTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          toolTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          toolTypes.forEach(tt => {
-            const label = getSubSubtypeLabel("Item", "tool", tt);
-            toolTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${tt}">${label}</button>`;
-          });
-          toolTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(toolTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedToolType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedToolType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedToolType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-
-      // Show sub-subtype pills if "loot" is selected (for gear, art, gem, etc.)
-      if (selectedItemSubtype === "loot") {
-        let lootItems = allItems.filter(i => i.type === "loot");
-        let lootTypes = [...new Set(lootItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (lootTypes.length) {
-          let lootTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          lootTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          lootTypes.forEach(lt => {
-            const label = getSubSubtypeLabel("Item", "loot", lt);
-            lootTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${lt}">${label}</button>`;
-          });
-          lootTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(lootTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedLootType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedLootType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedLootType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
-      }
-
-      // Show sub-subtype pills if "container" is selected (for bag, backpack, etc.)
-      if (selectedItemSubtype === "container") {
-        let containerItems = allItems.filter(i => i.type === "container");
-        let containerTypes = [...new Set(containerItems.map(i => i.system?.type?.value || ""))].filter(Boolean);
-        if (containerTypes.length) {
-          let containerTypeHtml = `<div id="panic-subsubtype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          containerTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Types</button>`;
-          containerTypes.forEach(ct => {
-            const label = getSubSubtypeLabel("Item", "container", ct);
-            containerTypeHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${ct}">${label}</button>`;
-          });
-          containerTypeHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(containerTypeHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedContainerType = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedContainerType) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedContainerType;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
+      // Sub-subtype pills for typed item subtypes
+      const TYPED_SUBTYPES_WITH_PILLS = ["weapon", "feat", "consumable", "equipment", "tool", "loot", "container"];
+      if (TYPED_SUBTYPES_WITH_PILLS.includes(selectedItemSubtype)) {
+        renderSubSubtypePills(selectedItemSubtype);
       }
 
       // Show sub-subtype pills if "spell" is selected (for spell level and school)
@@ -1007,29 +931,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         let spellItems = allItems.filter(i => i.type === "spell");
         
         // Spell Level row
-        let spellLevels = [...new Set(spellItems.map(i => i.system?.level))].filter(l => l !== undefined).sort((a,b) => a - b);
-        if (spellLevels.length) {
-          let levelHtml = `<div id="panic-spelllevel-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
-          levelHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="all">All Levels</button>`;
-          spellLevels.forEach(lvl => {
-            const label = getSubSubtypeLabel("Item", "spell", lvl);
-            levelHtml += `<button class="panic-subsubtype-btn panic-pill" data-subsubtype="${lvl}">${label}</button>`;
-          });
-          levelHtml += `</div>`;
-          html.find("#panic-subsubtype-container").html(levelHtml);
-          html.find(".panic-subsubtype-btn").on("click", function() {
-            const clickedLevel = $(this).data("subsubtype");
-            if (selectedItemSubSubtype === clickedLevel) {
-              selectedItemSubSubtype = "all";
-            } else {
-              selectedItemSubSubtype = clickedLevel;
-            }
-            updateCategoryMenu();
-            doSearch();
-          });
-          html.find('.panic-subsubtype-btn').removeClass('selected');
-          html.find(`.panic-subsubtype-btn[data-subsubtype='${selectedItemSubSubtype}']`).addClass('selected');
-        }
+        renderSubSubtypePills("spell", { allLabel: "All Levels", getValue: i => i.system?.level, sort: true });
         
         // Spell School row (add a new container for it)
         let spellSchools = [...new Set(spellItems.map(i => i.system?.school || ""))].filter(Boolean).sort();
@@ -1154,11 +1056,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         // Creature Type row
         let creatureTypes = [...new Set(npcActors.map(a => a.system?.details?.type?.value || ""))].filter(Boolean).sort();
         if (creatureTypes.length) {
-          const creatureLabels = { aberration: "Aberration", beast: "Beast", celestial: "Celestial", construct: "Construct", dragon: "Dragon", elemental: "Elemental", fey: "Fey", fiend: "Fiend", giant: "Giant", humanoid: "Humanoid", monstrosity: "Monstrosity", ooze: "Ooze", plant: "Plant", undead: "Undead" };
           let creatureHtml = `<div id="panic-creaturetype-menu" class="panic-item-subsubtype-menu" style="display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto;">`;
           creatureHtml += `<button class="panic-creaturetype-btn panic-pill" data-creature="all">All Types</button>`;
           creatureTypes.forEach(ct => {
-            const label = creatureLabels[ct] || ct.charAt(0).toUpperCase() + ct.slice(1);
+            const label = FILTER_CONFIG.Actor.creatureTypes[ct] || ct.charAt(0).toUpperCase() + ct.slice(1);
             creatureHtml += `<button class="panic-creaturetype-btn panic-pill" data-creature="${ct}">${label}</button>`;
           });
           creatureHtml += `</div>`;
@@ -1243,36 +1144,14 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       const filterContainer = html.find("#panic-filter-container")[0];
       if (!filterContainer) return;
       
-      // Measure each filter row's natural width
+      // Measure each filter row's natural width (includes spell school/class/CR rows)
       const rows = filterContainer.querySelectorAll('[id$="-menu"]');
       let maxWidth = 400; // minimum width
-      
+
       rows.forEach(row => {
-        // scrollWidth gives the full content width even if overflow is hidden/auto
         const rowWidth = row.scrollWidth + 40; // add padding for container margins
         if (rowWidth > maxWidth) maxWidth = rowWidth;
       });
-      
-      // Also check spell school container
-      const schoolContainer = html.find("#panic-spellschool-container [id$='-menu']")[0];
-      if (schoolContainer) {
-        const schoolWidth = schoolContainer.scrollWidth + 40;
-        if (schoolWidth > maxWidth) maxWidth = schoolWidth;
-      }
-      
-      // Also check spell class container
-      const classContainer = html.find("#panic-spellclass-container [id$='-menu']")[0];
-      if (classContainer) {
-        const classWidth = classContainer.scrollWidth + 40;
-        if (classWidth > maxWidth) maxWidth = classWidth;
-      }
-      
-      // Also check CR container (for Actor filters)
-      const crContainer = html.find("#panic-cr-container [id$='-menu']")[0];
-      if (crContainer) {
-        const crWidth = crContainer.scrollWidth + 40;
-        if (crWidth > maxWidth) maxWidth = crWidth;
-      }
       
       // Cap at reasonable max and add window chrome padding
       maxWidth = Math.min(maxWidth + 50, 1200);
@@ -1717,9 +1596,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           
           // Creature type
           const creatureType = sys.details?.type?.value;
-          const creatureLabels = { aberration: "Aberration", beast: "Beast", celestial: "Celestial", construct: "Construct", dragon: "Dragon", elemental: "Elemental", fey: "Fey", fiend: "Fiend", giant: "Giant", humanoid: "Humanoid", monstrosity: "Monstrosity", ooze: "Ooze", plant: "Plant", undead: "Undead" };
           if (creatureType) {
-            actorDetails.push(creatureLabels[creatureType] || creatureType.charAt(0).toUpperCase() + creatureType.slice(1));
+            actorDetails.push(FILTER_CONFIG.Actor.creatureTypes[creatureType] || creatureType.charAt(0).toUpperCase() + creatureType.slice(1));
           }
           
           // Size
@@ -1816,14 +1694,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       let descHtml = "";
       if (entry.type === "Item") {
         const doc = entry.document;
-        let desc = doc.system?.description?.value || doc.data?.description?.value || "";
-        let enrichedDesc = desc;
+        let enrichedDesc = getDocumentDescription(doc);
         try {
           const enrichContext = {
             rollData: doc.getRollData ? doc.getRollData() : {},
             relativeTo: doc
           };
-          enrichedDesc = await TextEditor.enrichHTML(desc, enrichContext);
+          enrichedDesc = await TextEditor.enrichHTML(enrichedDesc, enrichContext);
         } catch (err) {}
         descHtml = `<div class="panic-item-desc" style="font-size:0.93em;color:#bbb;display:none;margin-top:6px;padding-left:48px;border-top:1px solid #444;padding-top:6px;">${enrichedDesc}</div>`;
       }
@@ -1840,6 +1717,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
               <button class="panic-btn panic-pill" data-action="view-scene">👁 View</button>
               <button class="panic-btn panic-pill" data-action="switch-scene">🗺 Switch</button>
             `
+            : ""}
+          ${entry.type==="RollTable"
+            ? `<button class="panic-btn panic-pill" data-action="roll-table">🎲 Roll</button>`
             : ""}
           ${canGive
             ? `<button class="panic-btn panic-pill" data-action="give-item">➕ Give</button>`
@@ -2145,94 +2025,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       const addAll = (collection, type) => {
         collection.contents.forEach(doc => {
           if (!doc?.name) return;
-          // If Item, filter by subtype if set
-          if (type === "Item" && selectedType === "Item" && selectedItemSubtype !== "all") {
-            let docType = doc.type || "";
-            if (docType !== selectedItemSubtype) return;
-          }
-          // If weapon, filter by sub-subtype (martialM, martialR, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "weapon" && selectedItemSubSubtype !== "all") {
-            let weaponCategory = doc.system?.type?.value || "";
-            if (weaponCategory !== selectedItemSubSubtype) return;
-          }
-          // If feat, filter by sub-subtype (class, monster, race, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "feat" && selectedItemSubSubtype !== "all") {
-            let featType = doc.system?.type?.value || "";
-            if (featType !== selectedItemSubSubtype) return;
-          }
-          // If consumable, filter by sub-subtype (potion, poison, scroll, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "consumable" && selectedItemSubSubtype !== "all") {
-            let consumableType = doc.system?.type?.value || "";
-            if (consumableType !== selectedItemSubSubtype) return;
-          }
-          // If equipment, filter by sub-subtype (ring, wondrous, armor, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "equipment" && selectedItemSubSubtype !== "all") {
-            let equipmentType = doc.system?.type?.value || "";
-            if (equipmentType !== selectedItemSubSubtype) return;
-          }
-          // If tool, filter by sub-subtype (art, game, music, vehicle) if set
-          if (type === "Item" && selectedItemSubtype === "tool" && selectedItemSubSubtype !== "all") {
-            let toolType = doc.system?.type?.value || "";
-            if (toolType !== selectedItemSubSubtype) return;
-          }
-          // If loot, filter by sub-subtype (gear, art, gem, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "loot" && selectedItemSubSubtype !== "all") {
-            let lootType = doc.system?.type?.value || "";
-            if (lootType !== selectedItemSubSubtype) return;
-          }
-          // If container, filter by sub-subtype (backpack, bag, etc.) if set
-          if (type === "Item" && selectedItemSubtype === "container" && selectedItemSubSubtype !== "all") {
-            let containerType = doc.system?.type?.value || "";
-            if (containerType !== selectedItemSubSubtype) return;
-          }
-          // If spell, filter by level and/or school
-          if (type === "Item" && selectedItemSubtype === "spell") {
-            if (selectedItemSubSubtype !== "all") {
-              let spellLevel = doc.system?.level;
-              if (String(spellLevel) !== String(selectedItemSubSubtype)) return;
-            }
-            if (selectedSpellSchool !== "all") {
-              let spellSchool = doc.system?.school || "";
-              if (spellSchool !== selectedSpellSchool) return;
-            }
-            if (selectedSpellClass !== "all") {
-              let spellClasses = getSpellClasses(doc);
-              if (!spellClasses.includes(selectedSpellClass)) return;
-            }
-          }
-          // If Actor, filter by subtype if set
-          if (type === "Actor" && selectedType === "Actor" && selectedActorSubtype !== "all") {
-            let actorType = doc.type || "";
-            if (actorType !== selectedActorSubtype) return;
-          }
-          // If NPC actor, filter by creature type if set
-          if (type === "Actor" && selectedActorSubtype === "npc" && selectedCreatureType !== "all") {
-            let creatureType = doc.system?.details?.type?.value || "";
-            if (creatureType !== selectedCreatureType) return;
-          }
-          // If NPC actor, filter by CR range if set
-          if (type === "Actor" && selectedActorSubtype === "npc" && selectedCRRange !== "all") {
-            let cr = doc.system?.details?.cr;
-            if (cr === undefined || cr === null) return;
-            const crRanges = {
-              "0": { min: 0, max: 0 },
-              "0.125": { min: 0.125, max: 0.125 },
-              "0.25": { min: 0.25, max: 0.25 },
-              "0.5": { min: 0.5, max: 0.5 },
-              "1-4": { min: 1, max: 4 },
-              "5-10": { min: 5, max: 10 },
-              "11-16": { min: 11, max: 16 },
-              "17+": { min: 17, max: 999 }
-            };
-            const range = crRanges[selectedCRRange];
-            if (!range || cr < range.min || cr > range.max) return;
-          }
-          results.push({
-            name: doc.name,
-            type,
-            document: doc,
-            score: 1 // default score for sorting
-          });
+          if (!matchesFilters(doc, type)) return;
+          results.push({ name: doc.name, type, document: doc, score: 1 });
         });
       };
       if (selectedType === "all") {
@@ -2260,116 +2054,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       if (selectedType && selectedType !== "all") {
         results = results.filter(r => r.type === selectedType);
       }
-      // If Item, filter by subtype if set
-      if (selectedType === "Item" && selectedItemSubtype !== "all") {
-        results = results.filter(r => {
-          let docType = r.document.type || "";
-          return docType === selectedItemSubtype;
-        });
-      }
-      // If weapon, filter by sub-subtype if set
-      if (selectedItemSubtype === "weapon" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let weaponCategory = r.document.system?.type?.value || "";
-          return weaponCategory === selectedItemSubSubtype;
-        });
-      }
-      // If feat, filter by sub-subtype if set
-      if (selectedItemSubtype === "feat" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let featType = r.document.system?.type?.value || "";
-          return featType === selectedItemSubSubtype;
-        });
-      }
-      // If consumable, filter by sub-subtype if set
-      if (selectedItemSubtype === "consumable" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let consumableType = r.document.system?.type?.value || "";
-          return consumableType === selectedItemSubSubtype;
-        });
-      }
-      // If equipment, filter by sub-subtype if set
-      if (selectedItemSubtype === "equipment" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let equipmentType = r.document.system?.type?.value || "";
-          return equipmentType === selectedItemSubSubtype;
-        });
-      }
-      // If tool, filter by sub-subtype if set
-      if (selectedItemSubtype === "tool" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let toolType = r.document.system?.type?.value || "";
-          return toolType === selectedItemSubSubtype;
-        });
-      }
-      // If loot, filter by sub-subtype if set
-      if (selectedItemSubtype === "loot" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let lootType = r.document.system?.type?.value || "";
-          return lootType === selectedItemSubSubtype;
-        });
-      }
-      // If container, filter by sub-subtype if set
-      if (selectedItemSubtype === "container" && selectedItemSubSubtype !== "all") {
-        results = results.filter(r => {
-          let containerType = r.document.system?.type?.value || "";
-          return containerType === selectedItemSubSubtype;
-        });
-      }
-      // If spell, filter by level and/or school
-      if (selectedItemSubtype === "spell") {
-        if (selectedItemSubSubtype !== "all") {
-          results = results.filter(r => {
-            let spellLevel = r.document.system?.level;
-            return String(spellLevel) === String(selectedItemSubSubtype);
-          });
-        }
-        if (selectedSpellSchool !== "all") {
-          results = results.filter(r => {
-            let spellSchool = r.document.system?.school || "";
-            return spellSchool === selectedSpellSchool;
-          });
-        }
-        if (selectedSpellClass !== "all") {
-          results = results.filter(r => {
-            let spellClasses = getSpellClasses(r.document);
-            return spellClasses.includes(selectedSpellClass);
-          });
-        }
-      }
-      // If Actor, filter by subtype if set
-      if (selectedType === "Actor" && selectedActorSubtype !== "all") {
-        results = results.filter(r => {
-          let actorType = r.document.type || "";
-          return actorType === selectedActorSubtype;
-        });
-      }
-      // If NPC actor, filter by creature type if set
-      if (selectedActorSubtype === "npc" && selectedCreatureType !== "all") {
-        results = results.filter(r => {
-          let creatureType = r.document.system?.details?.type?.value || "";
-          return creatureType === selectedCreatureType;
-        });
-      }
-      // If NPC actor, filter by CR range if set
-      if (selectedActorSubtype === "npc" && selectedCRRange !== "all") {
-        const crRanges = {
-          "0": { min: 0, max: 0 },
-          "0.125": { min: 0.125, max: 0.125 },
-          "0.25": { min: 0.25, max: 0.25 },
-          "0.5": { min: 0.5, max: 0.5 },
-          "1-4": { min: 1, max: 4 },
-          "5-10": { min: 5, max: 10 },
-          "11-16": { min: 11, max: 16 },
-          "17+": { min: 17, max: 999 }
-        };
-        const range = crRanges[selectedCRRange];
-        results = results.filter(r => {
-          let cr = r.document.system?.details?.cr;
-          if (cr === undefined || cr === null) return false;
-          return range && cr >= range.min && cr <= range.max;
-        });
-      }
+      results = results.filter(r => matchesFilters(r.document, r.type));
     }
     await renderResults(results);
   }
