@@ -4,8 +4,14 @@
   "description": "Fast lookup and creation command palette",
   "version": "0.1.0",
   "authors": [
-    { "name": "You" }
+    {
+      "name": "Flavien Gascard",
+      "url": "https://github.com/Flavien-Gascard"
+    }
   ],
+  "url": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/tree/main/modules/dm-panic-button",
+  "readme": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/blob/main/modules/dm-panic-button/README.md",
+  "bugs": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/issues",
   "compatibility": {
     "minimum": "13",
     "verified": "13"
