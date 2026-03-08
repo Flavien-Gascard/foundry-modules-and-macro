@@ -906,17 +906,24 @@ function openCreateActorDialog(onCreated) {
 ================================================= */
 
 Hooks.on("renderDMPanicButton",(app,html)=>{
-    // Make the app fade when not hovered
+    // Auto-collapse to title bar when not hovered; expand on hover
     const appElement = html.closest(".app");
-    appElement.css({
-      opacity: 0.4,
-      transition: "opacity 0.3s ease"
+    let collapseTimer = null;
+
+    appElement.off("mouseenter.panic mouseleave.panic").on("mouseenter.panic", function () {
+      clearTimeout(collapseTimer);
+      if (app._minimized) app.maximize();
+    }).on("mouseleave.panic", function () {
+      clearTimeout(collapseTimer);
+      collapseTimer = setTimeout(() => {
+        if (!app._minimized) app.minimize();
+      }, 600);
     });
-    appElement.on("mouseenter", function() {
-      $(this).css("opacity", 1);
-    }).on("mouseleave", function() {
-      $(this).css("opacity", 0.4);
-    });
+
+    // Collapse immediately on first render if mouse isn't over it
+    collapseTimer = setTimeout(() => {
+      if (!app._minimized) app.minimize();
+    }, 1000);
     
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
@@ -952,10 +959,114 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         }
         #dm-panic-button .window-content {
           overflow: hidden !important;
+          display: flex !important;
+          flex-direction: column !important;
+          padding-bottom: 4px !important;
+        }
+        #dm-panic-button .panic-container {
+          display: flex !important;
+          flex-direction: column !important;
+          flex: 1 !important;
+          min-height: 0 !important;
+          overflow: hidden !important;
+        }
+        #dm-panic-button #panic-results {
+          flex: 1 !important;
+          min-height: 0 !important;
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
+        }
+        @keyframes panic-pulse {
+          0%, 100% { box-shadow: 0 0 4px 2px rgba(180,0,0,0.25); opacity: 0.75; }
+          50%       { box-shadow: 0 0 14px 5px rgba(220,0,0,0.55); opacity: 0.95; }
+        }
+        #dm-panic-button.minimized {
+          animation: panic-pulse 2s ease-in-out infinite;
+        }
+        #dm-panic-button:not(.minimized) {
+          animation: none;
+          opacity: 1;
+        }
+        #panic-macro-bar .panic-macro-slot {
+          background: #1a1a1a !important;
+          border: 1.5px solid #bfa046 !important;
+          border-radius: 6px !important;
+          padding: 3px 4px !important;
+          margin: 0 !important;
+          cursor: pointer !important;
+          flex-shrink: 0 !important;
+          flex-grow: 0 !important;
+          width: auto !important;
+          display: flex !important;
+          flex-direction: column !important;
+          align-items: center !important;
+          gap: 2px !important;
+          box-shadow: none !important;
+          line-height: 1 !important;
+        }
+        #panic-macro-bar .panic-macro-slot:hover {
+          background: #2a2a1a !important;
+          border-color: #ffe08a !important;
         }
       `;
       document.head.appendChild(style);
     }
+  // ── Macro Bar (Hotbar page 1, slots 1–7) ────────────────────────────────
+  if (!html.find('#panic-macro-bar').length) {
+    const hotbar = game.user.hotbar; // { slotNumber: macroId, ... }
+    let slotsHtml = '';
+    for (let i = 1; i <= 8; i++) {
+      const macroId = hotbar[i];
+      const macro = macroId ? game.macros.get(macroId) : null;
+      if (macro) {
+        const img = macro.img || 'icons/svg/dice-target.svg';
+        slotsHtml += `
+          <button class="panic-macro-slot" data-macro-id="${macro.id}"
+            style="background:#1a1a1a;border:1.5px solid #bfa046;border-radius:6px;
+                   padding:3px 4px 3px 4px;cursor:pointer;flex-shrink:0;
+                   display:flex;flex-direction:column;align-items:center;gap:2px;">
+            <img src="${img}" style="width:42px;height:42px;object-fit:cover;border-radius:4px;pointer-events:none;flex-shrink:0;" />
+            <span style="font-size:0.62em;color:#e7d7a1;white-space:nowrap;
+                         text-align:center;pointer-events:none;line-height:1.2;">${macro.name}</span>
+          </button>`;
+      } else {
+        slotsHtml += `<button disabled class="panic-macro-empty"
+            style="background:#111;border:1.5px dashed #3a2a0b;border-radius:6px;
+                   flex-shrink:0;opacity:0.3;cursor:default;">
+          </button>`;
+      }
+    }
+    const macroBar = $(`
+      <div id="panic-macro-bar"
+        style="display:flex;gap:4px;align-items:flex-start;padding:4px 2px 6px 2px;
+               border-bottom:1px solid #5a3e1b;margin-bottom:6px;">
+        ${slotsHtml}
+      </div>`);
+    html.find('.panic-container').prepend(macroBar);
+
+    // Equalize all filled slots to the width of the widest one.
+    // Must inject a <style> tag since jQuery .css() can't set !important.
+    const slots = html.find('.panic-macro-slot');
+    let maxW = 0;
+    slots.each(function () { maxW = Math.max(maxW, $(this).outerWidth()); });
+    const slotH = slots.first().outerHeight();
+    document.getElementById('panic-macro-eq-style')?.remove();
+    const eqStyle = document.createElement('style');
+    eqStyle.id = 'panic-macro-eq-style';
+    eqStyle.innerHTML = `
+      #panic-macro-bar .panic-macro-slot,
+      #panic-macro-bar .panic-macro-empty {
+        width: ${maxW}px !important;
+        height: ${slotH}px !important;
+      }`;
+    document.head.appendChild(eqStyle);
+
+    html.find('.panic-macro-slot').on('click', function () {
+      const macro = game.macros.get($(this).data('macro-id'));
+      if (macro) macro.execute();
+    });
+  }
+
   const input = html.find("#panic-search");
   const resultsDiv = html.find("#panic-results");
   const typeOptions = [
