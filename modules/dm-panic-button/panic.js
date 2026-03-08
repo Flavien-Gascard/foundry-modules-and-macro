@@ -614,7 +614,7 @@ async function handleItemPlaceClick(event) {
  * ACTION ENGINE
 ================================================= */
 
-async function runContextAction(action, entry) {
+async function runContextAction(action, entry, onRefresh) {
 
   console.log("PANIC ACTION:", action, entry);  // cancel placement if another action used
   hidePlacementPreview();
@@ -707,8 +707,199 @@ async function runContextAction(action, entry) {
       await table.draw();
       break;
     }
+
+    case "show-art": {
+      const ip = new ImagePopout(doc.img, { title: doc.name, shareable: true, uuid: doc.uuid });
+      await ip.render(true);
+      ip.shareImage();
+      break;
+    }
+
+    case "delete": {
+      const confirmed = await Dialog.confirm({
+        title: "Delete",
+        content: `<p>Permanently delete <strong>${doc.name}</strong>? This cannot be undone.</p>`,
+        defaultYes: false
+      });
+      if (!confirmed) break;
+      await doc.delete();
+      onRefresh?.();
+      break;
+    }
   }
 }
+
+/* =================================================
+ * CREATE DIALOGS
+================================================= */
+
+function openCreateItemDialog(onCreated) {
+  const itemTypes = [
+    { value: "weapon",     label: "Weapon" },
+    { value: "equipment",  label: "Equipment" },
+    { value: "consumable", label: "Consumable" },
+    { value: "tool",       label: "Tool" },
+    { value: "loot",       label: "Loot" },
+    { value: "container",  label: "Container" },
+    { value: "spell",      label: "Spell" },
+    { value: "feat",       label: "Feature / Feat" }
+  ];
+  const rarities = [
+    { value: "common",    label: "Common" },
+    { value: "uncommon",  label: "Uncommon" },
+    { value: "rare",      label: "Rare" },
+    { value: "veryRare",  label: "Very Rare" },
+    { value: "legendary", label: "Legendary" },
+    { value: "artifact",  label: "Artifact" }
+  ];
+
+  function buildSubtypeOptions(type) {
+    const opts = FILTER_CONFIG.Item.subSubtypes[type] || {};
+    const entries = Object.entries(opts);
+    if (!entries.length) return '<option value="">— None —</option>';
+    return entries.map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
+  }
+
+  const content = `
+    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Item name" style="width:100%" autofocus />
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select name="itemType" id="panic-new-item-type">
+          ${itemTypes.map(t => `<option value="${t.value}">${t.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-group" id="panic-new-subtype-group">
+        <label>Subtype</label>
+        <select name="itemSubtype" id="panic-new-item-subtype">
+          ${buildSubtypeOptions("weapon")}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Rarity</label>
+        <select name="rarity">
+          ${rarities.map(r => `<option value="${r.value}">${r.label}</option>`).join("")}
+        </select>
+      </div>
+    </form>`;
+
+  new Dialog({
+    title: "Create New Item",
+    content,
+    buttons: {
+      create: {
+        icon: '<i class="fas fa-plus"></i>',
+        label: "Create",
+        callback: async (html) => {
+          const form = html.find("form")[0];
+          const name = form.name.value.trim() || "New Item";
+          const itemType = form.itemType.value;
+          const subtype = form.itemSubtype?.value || "";
+          const rarity = form.rarity.value;
+
+          const system = { rarity };
+          if (itemType === "spell") {
+            system.level = parseInt(subtype) || 0;
+          } else if (subtype) {
+            system.type = { value: subtype };
+          }
+
+          const item = await Item.create({ name, type: itemType, system });
+          if (item) {
+            item.sheet.render(true);
+            onCreated?.();
+          }
+        }
+      },
+      cancel: { label: "Cancel" }
+    },
+    default: "create",
+    render: (html) => {
+      html.find("#panic-new-item-type").on("change", function () {
+        const opts = buildSubtypeOptions(this.value);
+        html.find("#panic-new-item-subtype").html(opts);
+        const hasSubtypes = Object.keys(FILTER_CONFIG.Item.subSubtypes[this.value] || {}).length > 0;
+        html.find("#panic-new-subtype-group").toggle(hasSubtypes);
+      });
+    }
+  }).render(true);
+}
+
+
+function openCreateActorDialog(onCreated) {
+  const crValues = [0, 0.125, 0.25, 0.5,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22, 23, 24, 25, 26, 27, 28, 29, 30];
+  const crLabel = cr => ({ 0.125: "1/8", 0.25: "1/4", 0.5: "1/2" }[cr] ?? String(cr));
+
+  const content = `
+    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Actor name" style="width:100%" autofocus />
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select name="actorType" id="panic-new-actor-type">
+          <option value="npc">NPC</option>
+          <option value="character">Character</option>
+        </select>
+      </div>
+      <div class="form-group" id="panic-new-creature-type-group">
+        <label>Creature Type</label>
+        <select name="creatureType">
+          ${Object.entries(FILTER_CONFIG.Actor.creatureTypes).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-group" id="panic-new-cr-group">
+        <label>Challenge Rating</label>
+        <select name="cr">
+          ${crValues.map(cr => `<option value="${cr}">CR ${crLabel(cr)}</option>`).join("")}
+        </select>
+      </div>
+    </form>`;
+
+  new Dialog({
+    title: "Create New Actor",
+    content,
+    buttons: {
+      create: {
+        icon: '<i class="fas fa-plus"></i>',
+        label: "Create",
+        callback: async (html) => {
+          const form = html.find("form")[0];
+          const name = form.name.value.trim() || "New Actor";
+          const actorType = form.actorType.value;
+          const system = actorType === "npc" ? {
+            details: {
+              type: { value: form.creatureType.value },
+              cr: parseFloat(form.cr.value) || 0
+            }
+          } : {};
+
+          const actor = await Actor.create({ name, type: actorType, system });
+          if (actor) {
+            actor.sheet.render(true);
+            onCreated?.();
+          }
+        }
+      },
+      cancel: { label: "Cancel" }
+    },
+    default: "create",
+    render: (html) => {
+      html.find("#panic-new-actor-type").on("change", function () {
+        const isNpc = this.value === "npc";
+        html.find("#panic-new-creature-type-group, #panic-new-cr-group").toggle(isNpc);
+      });
+    }
+  }).render(true);
+}
+
 
 /* =================================================
  * UI RENDER
@@ -791,6 +982,15 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     // Always insert a horizontal line between filters and search bar
     html.find('#panic-type-search-hr').remove();
     html.find('#panic-filter-container').after('<hr id="panic-type-search-hr" style="border:0;border-top:1.5px solid #bfa046;margin:8px 0 4px 0;">');
+
+    // Create bar (inserted once between HR and search)
+    if (!html.find('#panic-create-bar').length) {
+      input.parent().before(`
+        <div id="panic-create-bar" style="display:flex;gap:6px;margin:2px 0 6px 0;">
+          <button id="panic-create-item-btn" class="panic-btn panic-pill" style="flex:1;">➕ New Item</button>
+          <button id="panic-create-actor-btn" class="panic-btn panic-pill" style="flex:1;">➕ New Actor</button>
+        </div>`);
+    }
 
   let selectedType = "all";
   let selectedItemSubtype = "all";
@@ -1188,6 +1388,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     doSearch();
   });
   updateCategoryMenu();
+
+  html.find('#panic-create-item-btn').on('click', () => openCreateItemDialog(() => input.trigger("input")));
+  html.find('#panic-create-actor-btn').on('click', () => openCreateActorDialog(() => input.trigger("input")));
 
 
   async function renderResults(list){
@@ -1710,7 +1913,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           <button class="panic-btn panic-pill" data-action="open">👁 Open</button>
           <button class="panic-btn panic-pill" data-action="chat">💬 Chat</button>
           ${entry.type==="Actor"
-            ? `<button class="panic-btn panic-pill" data-action="spawn">🧙 Spawn</button>`
+            ? `
+              <button class="panic-btn panic-pill" data-action="spawn">🧙 Spawn</button>
+              <button class="panic-btn panic-pill" data-action="show-art">🖼 Show Art</button>
+            `
             : ""}
           ${entry.type==="Scene"
             ? `
@@ -1727,6 +1933,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           ${canPlace
             ? `<button class="panic-btn panic-pill" data-action="place-item">🪙 Place Item</button>`
             : ""}
+          <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>
         </div>
       `;
       const el=$( 
@@ -1746,7 +1953,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         ev.stopPropagation();
         await runContextAction(
           ev.currentTarget.dataset.action,
-          entry
+          entry,
+          () => input.trigger("input")
         );
       });
       // Toggle description collapse/expand (clicking the title)
