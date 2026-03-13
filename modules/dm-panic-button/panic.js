@@ -2443,13 +2443,18 @@ Hooks.on("createChatMessage", async (message) => {
   if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
   if (!game.user.isGM) return;
 
+  console.log("🤖 AI Chatbot | message flags:", JSON.stringify(message.flags?.dnd5e));
+
   const rollType = message.flags?.dnd5e?.roll?.type;
-  if (rollType !== "attack") return;
+  if (rollType !== "attack") {
+    console.log(`🤖 AI Chatbot | skipping — rollType="${rollType}" (need "attack")`);
+    return;
+  }
 
   const actorId = message.speaker?.actor;
   const actor = game.actors?.get(actorId);
-  if (!actor) return;
-  if (actor.type !== "npc") return;
+  if (!actor) { console.log("🤖 AI Chatbot | no actor found"); return; }
+  if (actor.type !== "npc") { console.log(`🤖 AI Chatbot | skipping — actor type="${actor.type}"`); return; }
 
   const attackerName = message.speaker?.alias || actor.name;
   const attackerType = actor.system?.details?.type?.subtype
