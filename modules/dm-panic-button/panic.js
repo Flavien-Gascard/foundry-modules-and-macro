@@ -627,6 +627,53 @@ async function runContextAction(action, entry, onRefresh) {
 
     /* ---------- Generic ---------- */
 
+    case "brief-me": {
+      const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+
+      // Strip HTML from description and truncate
+      const rawDesc = getDocumentDescription(doc);
+      const bio = rawDesc.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+
+      // Gather subtype for richer prompts
+      const subtype = doc.system?.details?.type?.subtype
+        || doc.system?.details?.type?.value
+        || doc.type
+        || "";
+
+      ui.notifications.info(`🧠 Generating DM briefing for ${doc.name}…`);
+
+      try {
+        const res = await fetch(`${serverUrl}/brief`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: doc.name, category: entry.type, subtype, bio }),
+        });
+
+        if (!res.ok) { ui.notifications.error(`AI server error: ${res.status}`); break; }
+
+        const { text } = await res.json();
+        if (!text) break;
+
+        // Format bullets as HTML and post as GM-only whisper
+        const formatted = text
+          .split("\n")
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => `<p style="margin:2px 0">${line}</p>`)
+          .join("");
+
+        ChatMessage.create({
+          content: `<strong style="color:#c9a84c">🧠 DM Brief: ${doc.name}</strong><hr style="border-color:#5a3e1b;margin:4px 0">${formatted}`,
+          whisper: ChatMessage.getWhisperRecipients("GM"),
+        });
+
+      } catch (err) {
+        console.error("DM Panic Button | Brief Me error:", err);
+        ui.notifications.error("Could not reach AI server.");
+      }
+      break;
+    }
+
     case "open":
       doc.sheet?.render(true);
       break;
@@ -2043,6 +2090,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             : ""}
           ${canPlace
             ? `<button class="panic-btn panic-pill" data-action="place-item">🪙 Place Item</button>`
+            : ""}
+          ${game.settings.get("dm-panic-button", "aiChatbotEnabled")
+            ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>`
             : ""}
           <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>
         </div>

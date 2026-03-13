@@ -11,7 +11,12 @@ app.use(express.json());
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Tone prompts
+// Creature types that cannot speak — describe their sounds/behavior instead
+const BEAST_TYPES = new Set([
+  'beast', 'monstrosity', 'ooze', 'plant', 'swarm',
+]);
+
+// Tone prompts for speaking creatures
 const TONE = {
   menacing:  "You are a dark and terrifying creature. Speak with cold, predatory menace.",
   taunting:  "You are a cruel and mocking creature. Speak with gleeful contempt for your enemy.",
@@ -19,25 +24,96 @@ const TONE = {
   comedic:   "You are a bumbling but dangerous monster. Speak with unintentional comic menace.",
 };
 
-app.post('/npc-taunt', async (req, res) => {
-  const { attackerName, attackerType, attackName, damage, targetName, hit, tone = 'menacing' } = req.body;
+function buildPrompt(attackerName, attackerType, attackName, targetName, hit, tone) {
+  const situation = hit
+    ? `It just struck ${targetName} with its ${attackName}.`
+    : `It just missed ${targetName} with its ${attackName}.`;
+
+  const isBeast = BEAST_TYPES.has(attackerType?.toLowerCase());
+
+  if (isBeast) {
+    return `You are narrating the behavior of ${attackerName}, a ${attackerType} that cannot speak.
+${situation}
+Describe 1 brief animalistic reaction — a sound, posture, or instinctive behavior (max 15 words).
+Write in third person. No dialogue. Examples: "It snaps its jaws and lets out a guttural snarl." or "It recoils, hissing, eyes locked on its prey."`;
+  }
 
   const toneInstruction = TONE[tone] || TONE.menacing;
-
-  const situation = hit
-    ? `You just struck ${targetName} with your ${attackName} for ${damage} damage.`
+  const speakSituation = hit
+    ? `You just struck ${targetName} with your ${attackName}.`
     : `You just missed ${targetName} with your ${attackName}.`;
 
-  const prompt = `${toneInstruction}
+  return `${toneInstruction}
 You are ${attackerName}, a ${attackerType}.
-${situation}
+${speakSituation}
 Say something in character — 1 short sentence, max 20 words.
 No quotation marks. No stage directions. Just the spoken words.`;
+}
+
+app.post('/npc-taunt', async (req, res) => {
+  const { attackerName, attackerType, attackName, targetName, hit, tone = 'menacing' } = req.body;
+  const prompt = buildPrompt(attackerName, attackerType, attackName, targetName, hit, tone);
 
   try {
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 80,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    res.json({ text: message.content[0].text.trim() });
+  } catch (err) {
+    console.error('Claude API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /brief — DM roleplay briefing for any document type ──
+const BRIEF_PROMPTS = {
+  Actor: (name, subtype, bio) => `You are a D&D 5e expert helping a Dungeon Master run a game at the table right now.
+Give a concise DM briefing for the NPC/creature "${name}" (${subtype || "creature"}).
+${bio ? `Here is some background on this creature:\n${bio}\n` : "Draw on your D&D/fantasy knowledge of this creature."}
+Cover in 3-4 short bullet points:
+• Personality & motivations
+• How it speaks or sounds (voice, tone, vocabulary)
+• Combat behavior & tactics
+• One memorable quirk or trait to make it feel alive
+Keep it punchy — this is a quick reference card, not an essay.`,
+
+  Item: (name, subtype, bio) => `You are a D&D 5e expert helping a Dungeon Master describe an item to players.
+Give a concise DM briefing for the item "${name}" (${subtype || "item"}).
+${bio ? `Item description:\n${bio}\n` : "Draw on your D&D/fantasy knowledge."}
+Cover in 3-4 short bullet points:
+• What it looks like and feels like when held
+• Its history or origin (1 sentence of lore)
+• How to describe its effect dramatically at the table
+• Any interesting RP hooks or quirks`,
+
+  Scene: (name, _subtype, bio) => `You are a D&D 5e expert helping a Dungeon Master set a scene.
+Give a concise DM briefing for the location "${name}".
+${bio ? `Location notes:\n${bio}\n` : "Draw on your D&D/fantasy knowledge."}
+Cover in 3-4 short bullet points:
+• Atmosphere: sights, sounds, smells
+• Mood and tone to convey to players
+• Key details to emphasize
+• Potential dangers or points of interest`,
+
+  default: (name, subtype, bio) => `You are a D&D 5e expert helping a Dungeon Master.
+Give a concise briefing for "${name}" (${subtype || "unknown type"}).
+${bio ? `Background:\n${bio}\n` : "Draw on your D&D/fantasy knowledge."}
+Cover in 3-4 short bullet points relevant to using this at the table right now.`,
+};
+
+app.post('/brief', async (req, res) => {
+  const { name, category, subtype, bio } = req.body;
+
+  const promptFn = BRIEF_PROMPTS[category] || BRIEF_PROMPTS.default;
+  const prompt = promptFn(name, subtype, bio ? bio.slice(0, 400) : '');
+
+  try {
+    const message = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
       messages: [{ role: 'user', content: prompt }],
     });
 
