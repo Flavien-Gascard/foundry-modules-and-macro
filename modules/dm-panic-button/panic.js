@@ -2438,41 +2438,17 @@ Hooks.once("ready", () => {
   });
 });
 
-// ── Hook into attack rolls ────────────────────────
-Hooks.on("createChatMessage", async (message) => {
-  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
-  if (!game.user.isGM) return;
-
-  console.log("🤖 AI Chatbot | message flags:", JSON.stringify(message.flags?.dnd5e));
-
-  const rollType = message.flags?.dnd5e?.roll?.type;
-  if (rollType !== "attack") {
-    console.log(`🤖 AI Chatbot | skipping — rollType="${rollType}" (need "attack")`);
-    return;
-  }
-
-  const actorId = message.speaker?.actor;
-  const actor = game.actors?.get(actorId);
-  if (!actor) { console.log("🤖 AI Chatbot | no actor found"); return; }
-  if (actor.type !== "npc") { console.log(`🤖 AI Chatbot | skipping — actor type="${actor.type}"`); return; }
-
-  const attackerName = message.speaker?.alias || actor.name;
+// ── Shared taunt function ─────────────────────────
+async function _aiNpcTaunt(actor, attackName, hit, targetName) {
+  const serverUrl    = game.settings.get("dm-panic-button", "aiServerUrl");
+  const tone         = game.settings.get("dm-panic-button", "aiChatbotTone");
+  const whisper      = game.settings.get("dm-panic-button", "aiChatbotWhisper");
+  const attackerName = actor.token?.name || actor.name;
   const attackerType = actor.system?.details?.type?.subtype
     || actor.system?.details?.type?.value
     || "creature";
-  const attackName = message.flavor || "attack";
-  const roll       = message.rolls?.[0];
-  const rollTotal  = roll?.total ?? 0;
 
-  const targets     = Array.from(game.user.targets ?? []);
-  const targetToken = targets[0];
-  const targetName  = targetToken?.name || "you";
-  const targetAC    = targetToken?.actor?.system?.attributes?.ac?.value ?? 10;
-  const hit         = rollTotal >= targetAC;
-
-  const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
-  const tone      = game.settings.get("dm-panic-button", "aiChatbotTone");
-  const whisper   = game.settings.get("dm-panic-button", "aiChatbotWhisper");
+  console.log(`🤖 AI Chatbot | calling server — ${attackerName} ${hit ? "hit" : "missed"} ${targetName}`);
 
   try {
     const res = await fetch(`${serverUrl}/npc-taunt`, {
@@ -2481,10 +2457,7 @@ Hooks.on("createChatMessage", async (message) => {
       body: JSON.stringify({ attackerName, attackerType, attackName, damage: 0, targetName, hit, tone }),
     });
 
-    if (!res.ok) {
-      console.warn(`DM Panic Button | AI server responded ${res.status}`);
-      return;
-    }
+    if (!res.ok) { console.warn(`DM Panic Button | AI server responded ${res.status}`); return; }
 
     const { text } = await res.json();
     if (!text) return;
@@ -2494,8 +2467,45 @@ Hooks.on("createChatMessage", async (message) => {
       speaker: ChatMessage.getSpeaker({ actor }),
       whisper: whisper ? ChatMessage.getWhisperRecipients("GM") : [],
     });
-
   } catch (err) {
     console.error("DM Panic Button | AI chatbot error:", err);
   }
+}
+
+// ── midi-qol hook (fires after full attack workflow) ──
+Hooks.on("midi-qol.AttackRollComplete", async (workflow) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+
+  const actor = workflow.actor;
+  if (!actor || actor.type !== "npc") return;
+
+  const attackName = workflow.item?.name || "attack";
+  const target     = workflow.targets?.first();
+  const targetName = target?.name || "you";
+  const hit        = workflow.attackTotal >= (target?.actor?.system?.attributes?.ac?.value ?? 10);
+
+  console.log(`🤖 AI Chatbot | midi-qol hook fired for ${actor.name}`);
+  await _aiNpcTaunt(actor, attackName, hit, targetName);
+});
+
+// ── Vanilla dnd5e fallback (skipped when midi-qol active) ──
+Hooks.on("createChatMessage", async (message) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+  if (game.modules.get("midi-qol")?.active) return;
+
+  const rollType = message.flags?.dnd5e?.roll?.type;
+  if (rollType !== "attack") return;
+
+  const actor = game.actors?.get(message.speaker?.actor);
+  if (!actor || actor.type !== "npc") return;
+
+  const roll       = message.rolls?.[0];
+  const targets    = Array.from(game.user.targets ?? []);
+  const targetName = targets[0]?.name || "you";
+  const targetAC   = targets[0]?.actor?.system?.attributes?.ac?.value ?? 10;
+  const hit        = (roll?.total ?? 0) >= targetAC;
+
+  await _aiNpcTaunt(actor, message.flavor || "attack", hit, targetName);
 });
