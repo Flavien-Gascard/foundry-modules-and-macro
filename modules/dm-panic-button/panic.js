@@ -2382,6 +2382,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   html.find("#panic-type-filter").remove();
   input.on("input", doSearch);
   setTimeout(()=>input.focus(),50);
+});
 
 
 /* =================================================
@@ -2492,5 +2493,4 @@ Hooks.on("createChatMessage", async (message) => {
   } catch (err) {
     console.error("DM Panic Button | AI chatbot error:", err);
   }
-});
 });
