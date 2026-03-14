@@ -674,6 +674,56 @@ async function runContextAction(action, entry, onRefresh) {
       break;
     }
 
+    case "generate-art": {
+      const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+      const rawDesc   = getDocumentDescription(doc);
+      const bio       = rawDesc.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+      const subtype   = doc.system?.details?.type?.subtype
+        || doc.system?.details?.type?.value
+        || doc.type || "";
+
+      ui.notifications.info(`🎨 Generating art for ${doc.name}… (5–10 seconds)`);
+
+      try {
+        const res = await fetch(`${serverUrl}/generate-image`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: doc.name, category: entry.type, subtype, bio }),
+        });
+
+        if (!res.ok) { ui.notifications.error(`Image generation failed: ${res.status}`); break; }
+
+        const { image, prompt } = await res.json();
+        if (!image) break;
+
+        new Dialog({
+          title: `🎨 ${doc.name}`,
+          content: `<div style="text-align:center">
+            <img src="${image}" style="max-width:100%;border-radius:4px;border:2px solid #5a3e1b"/>
+            <p style="color:#888;font-size:0.8em;margin-top:6px;font-style:italic">${prompt}</p>
+          </div>`,
+          buttons: {
+            show: {
+              label: "🖼 Show Players",
+              callback: () => {
+                ChatMessage.create({
+                  content: `<div style="text-align:center"><strong style="color:#c9a84c">${doc.name}</strong><br/><img src="${image}" style="max-width:100%;border-radius:4px;margin-top:6px"/></div>`,
+                  whisper: [],
+                });
+              },
+            },
+            close: { label: "Close" },
+          },
+          default: "close",
+        }, { width: 540 }).render(true);
+
+      } catch (err) {
+        console.error("DM Panic Button | Generate Art error:", err);
+        ui.notifications.error("Could not reach AI server.");
+      }
+      break;
+    }
+
     case "open":
       doc.sheet?.render(true);
       break;
@@ -2092,7 +2142,8 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             ? `<button class="panic-btn panic-pill" data-action="place-item">🪙 Place Item</button>`
             : ""}
           ${game.settings.get("dm-panic-button", "aiChatbotEnabled")
-            ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>`
+            ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>
+               <button class="panic-btn panic-pill" data-action="generate-art" title="AI Generate Art (GM only)">🎨 Art</button>`
             : ""}
           <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>
         </div>

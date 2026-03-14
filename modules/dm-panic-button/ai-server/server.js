@@ -11,6 +11,19 @@ app.use(express.json());
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── Session cost tracker ──────────────────────────────────────────────
+const COSTS = {
+  taunt:  0.000025,   // Claude Haiku ~80 tokens
+  brief:  0.00015,    // Claude Haiku ~300 tokens
+  imgPrompt: 0.00005, // Claude Haiku ~100 tokens (image prompt build)
+  image:  0.03,       // Stability Core per image
+};
+let sessionTotal = 0;
+function logCost(label, cost) {
+  sessionTotal += cost;
+  console.log(`💰 ${label} — ~$${cost.toFixed(5)} | Session total: ~$${sessionTotal.toFixed(4)}`);
+}
+
 // Creature types that cannot speak — describe their sounds/behavior instead
 const BEAST_TYPES = new Set([
   'beast', 'monstrosity', 'ooze', 'plant', 'swarm',
@@ -61,7 +74,9 @@ app.post('/npc-taunt', async (req, res) => {
       messages: [{ role: 'user', content: prompt }],
     });
 
-    res.json({ text: message.content[0].text.trim() });
+    const text = message.content[0].text.trim();
+    logCost(`Taunt for "${attackerName}"`, COSTS.taunt);
+    res.json({ text });
   } catch (err) {
     console.error('Claude API error:', err.message);
     res.status(500).json({ error: err.message });
@@ -117,9 +132,68 @@ app.post('/brief', async (req, res) => {
       messages: [{ role: 'user', content: prompt }],
     });
 
-    res.json({ text: message.content[0].text.trim() });
+    const text = message.content[0].text.trim();
+    logCost(`Brief for "${name}"`, COSTS.brief);
+    res.json({ text });
   } catch (err) {
     console.error('Claude API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /generate-image — AI art via Stability AI ────────────────────────
+async function buildImagePrompt(name, category, subtype, bio) {
+  const subject = category === 'Actor' ? `a ${subtype || 'creature'} named ${name}`
+    : category === 'Item'  ? `a fantasy item called ${name} (${subtype || 'item'})`
+    : `a fantasy scene: ${name}`;
+
+  const message = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 100,
+    messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 40 words) for a D&D fantasy illustration of ${subject}.${bio ? ` Context: ${bio.slice(0, 150)}` : ''} Style: detailed fantasy art, dramatic lighting. Output only the prompt.` }],
+  });
+
+  return message.content[0].text.trim();
+}
+
+app.post('/generate-image', async (req, res) => {
+  const { name, category, subtype, bio } = req.body;
+
+  if (!process.env.STABILITY_API_KEY) {
+    return res.status(500).json({ error: 'STABILITY_API_KEY not configured in .env' });
+  }
+
+  try {
+    const imagePrompt = await buildImagePrompt(name, category, subtype, bio);
+    console.log(`🎨 Generating image for "${name}": ${imagePrompt}`);
+
+    const form = new FormData();
+    form.append('prompt', imagePrompt);
+    form.append('output_format', 'jpeg');
+
+    const stabilityRes = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
+        'Accept': 'image/*',
+      },
+      body: form,
+    });
+
+    if (!stabilityRes.ok) {
+      const errText = await stabilityRes.text();
+      console.error('Stability AI error:', errText);
+      return res.status(500).json({ error: `Stability AI ${stabilityRes.status}: ${errText}` });
+    }
+
+    const buffer = await stabilityRes.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    logCost(`Image for "${name}"`, COSTS.imgPrompt + COSTS.image);
+
+    res.json({ image: `data:image/jpeg;base64,${base64}`, prompt: imagePrompt });
+
+  } catch (err) {
+    console.error('Image generation error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -128,5 +202,6 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {
   console.log(`DM Panic Button AI server running on http://localhost:${PORT}`);
-  console.log(`API key: ${process.env.ANTHROPIC_API_KEY ? 'loaded' : 'MISSING — check your .env file'}`);
+  console.log(`Anthropic API key: ${process.env.ANTHROPIC_API_KEY ? 'loaded' : 'MISSING'}`);
+  console.log(`Stability API key: ${process.env.STABILITY_API_KEY ? 'loaded' : 'not configured (image gen disabled)'}`);
 });
