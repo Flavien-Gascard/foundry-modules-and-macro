@@ -199,18 +199,31 @@ app.post('/generate-image', async (req, res) => {
 });
 
 // ── /generate-map — top-down battle map from room description ─────────
+const SPACE_LABELS = {
+  room:     'enclosed stone dungeon room',
+  cavern:   'natural cave cavern with rough rocky walls',
+  corridor: 'narrow dungeon corridor passage',
+  open:     'open area with minimal walls',
+  chamber:  'large grand chamber hall',
+};
+
 app.post('/generate-map', async (req, res) => {
-  const { roomName, description } = req.body;
+  const { roomName, description, spaceType = 'room', exits = [] } = req.body;
 
   if (!process.env.STABILITY_API_KEY) {
     return res.status(500).json({ error: 'STABILITY_API_KEY not configured in .env' });
   }
 
+  const spaceLabel = SPACE_LABELS[spaceType] || 'dungeon room';
+  const exitDesc = exits.length > 0
+    ? 'Exits: ' + exits.map(e => `${e.doorType.replace(/-/g,' ')} on ${e.direction} wall (${e.state})`).join(', ')
+    : '';
+
   try {
     const promptMsg = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 40 words) for a top-down D&D battle map of "${roomName}". Context: ${(description || '').slice(0, 200)}. Style: top-down bird's eye view, grid-aligned dungeon tiles, detailed floor texture, no characters, fantasy tabletop RPG map. Output only the prompt.` }],
+      max_tokens: 120,
+      messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 50 words) for a top-down D&D battle map. Location: "${roomName}" (${spaceLabel}). Context: ${(description || '').slice(0, 150)}${exitDesc ? '. ' + exitDesc : ''}. Style: top-down bird's eye view, grid-aligned dungeon tiles, detailed floor texture, no characters, fantasy tabletop RPG map. Output only the prompt.` }],
     });
     const mapPrompt = promptMsg.content[0].text.trim();
     console.log(`🗺 Generating battle map for "${roomName}": ${mapPrompt}`);

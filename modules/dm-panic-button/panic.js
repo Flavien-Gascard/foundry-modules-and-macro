@@ -754,28 +754,60 @@ async function runContextAction(action, entry, onRefresh) {
       const rooms = extractRoomsFromJournal(doc);
       if (!rooms.length) { ui.notifications.warn("No numbered rooms found in this journal."); break; }
 
-      const options = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
-      const dialog = new Dialog({
+      const S = "background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b;padding:2px;";
+      const roomOpts  = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
+      const spaceOpts = [["room","Room (enclosed)"],["cavern","Cavern (natural cave)"],["corridor","Corridor (narrow passage)"],["open","Open Area (no walls)"],["chamber","Chamber (large hall)"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+      const dirOpts   = ["N","NE","E","SE","S","SW","W","NW"].map(d=>`<option value="${d}">${d}</option>`).join("");
+      const typeOpts  = [["wooden-door","Wooden Door"],["iron-door","Iron Door"],["secret-door","Secret Door"],["archway","Archway"],["portcullis","Portcullis"],["locked-door","Locked Door"],["stairs-up","Stairs Up"],["stairs-down","Stairs Down"],["rubble","Collapsed/Rubble"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+      const stateOpts = [["closed","Closed"],["open","Open"],["locked","Locked"],["hidden","Hidden"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+      const makeExitRow = () => `<div class="panic-exit-row" style="display:flex;gap:4px;margin-bottom:4px;align-items:center">
+        <select class="exit-dir"   style="${S}width:52px">${dirOpts}</select>
+        <select class="exit-type"  style="${S}flex:1">${typeOpts}</select>
+        <select class="exit-state" style="${S}width:76px">${stateOpts}</select>
+        <button class="exit-remove" style="background:#3a1a1a;color:#e05050;border:1px solid #5a1b1b;padding:2px 6px;cursor:pointer">✕</button>
+      </div>`;
+
+      const mapDialog = new Dialog({
         title: "🗺 Generate Battle Map",
-        content: `<div style="margin-bottom:8px">
-          <label style="color:#ccc0a0;display:block;margin-bottom:4px">Choose a room:</label>
-          <select id="panic-room-select" style="width:100%;padding:4px;background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b">${options}</select>
+        content: `<div style="color:#ccc0a0;font-size:0.95em">
+          <div style="margin-bottom:8px">
+            <label style="display:block;margin-bottom:3px">Room:</label>
+            <select id="panic-room-select" style="width:100%;${S}">${roomOpts}</select>
+          </div>
+          <div style="margin-bottom:8px">
+            <label style="display:block;margin-bottom:3px">Space Type:</label>
+            <select id="panic-space-type" style="width:100%;${S}">${spaceOpts}</select>
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:3px">Exits / Doors:</label>
+            <div id="panic-exits"></div>
+            <button id="panic-add-exit" style="width:100%;margin-top:4px;background:#1a2e1a;color:#88c088;border:1px solid #3a5e3a;padding:3px;cursor:pointer">+ Add Exit</button>
+          </div>
         </div>`,
         buttons: {
           generate: {
             label: "🗺 Generate",
             callback: async (html) => {
-              const idx = parseInt(html.find("#panic-room-select").val());
+              const idx       = parseInt(html.find("#panic-room-select").val());
+              const spaceType = html.find("#panic-space-type").val();
               const { roomName, description } = rooms[idx];
-              const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+              const exits = [];
+              html.find(".panic-exit-row").each((_, row) => {
+                exits.push({
+                  direction: $(row).find(".exit-dir").val(),
+                  doorType:  $(row).find(".exit-type").val(),
+                  state:     $(row).find(".exit-state").val(),
+                });
+              });
 
+              const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
               ui.notifications.info(`🗺 Generating battle map for "${roomName}"… (10–15 seconds)`);
 
               try {
                 const res = await fetch(`${serverUrl}/generate-map`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ roomName, description }),
+                  body: JSON.stringify({ roomName, description, spaceType, exits }),
                 });
 
                 if (!res.ok) { ui.notifications.error(`Map generation failed: ${res.status}`); return; }
@@ -783,13 +815,11 @@ async function runContextAction(action, entry, onRefresh) {
                 const { image } = await res.json();
                 if (!image) return;
 
-                // Upload image to Foundry user data
                 const blob = await fetch(image).then(r => r.blob());
                 const filename = `battle-map-${roomName.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}.jpg`;
                 const file = new File([blob], filename, { type: "image/jpeg" });
                 const result = await FilePicker.upload("data", "battle-maps", file, { notify: false });
 
-                // Create the scene
                 await Scene.create({
                   name: roomName,
                   background: { src: result.path },
@@ -810,8 +840,18 @@ async function runContextAction(action, entry, onRefresh) {
           cancel: { label: "Cancel" },
         },
         default: "generate",
-      }, { width: 420 });
-      dialog.render(true);
+        render: (html) => {
+          html.find("#panic-exits").on("click", ".exit-remove", function(ev) {
+            ev.preventDefault();
+            $(this).closest(".panic-exit-row").remove();
+          });
+          html.find("#panic-add-exit").on("click", (ev) => {
+            ev.preventDefault();
+            html.find("#panic-exits").append(makeExitRow());
+          });
+        },
+      }, { width: 480 });
+      mapDialog.render(true);
       break;
     }
 
