@@ -314,6 +314,32 @@ function getDocumentDescription(doc) {
 }
 
 
+// ── Extract numbered rooms from a journal's HTML pages ───────────────
+function extractRoomsFromJournal(doc) {
+  const rooms = [];
+  const pages = doc.pages?.contents ?? [];
+  for (const page of pages) {
+    if (page.type !== "text") continue;
+    const html = page.text?.content || "";
+    if (!html) continue;
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    const headings = div.querySelectorAll("h2, h3");
+    for (const heading of headings) {
+      const title = heading.textContent.trim();
+      if (!/^\d+[a-z]?\./i.test(title)) continue;
+      const paragraphs = [];
+      let sibling = heading.nextElementSibling;
+      while (sibling && !["H1","H2","H3"].includes(sibling.tagName)) {
+        if (sibling.tagName === "P") paragraphs.push(sibling.textContent.trim());
+        sibling = sibling.nextElementSibling;
+      }
+      rooms.push({ pageId: page._id, pageName: page.name, roomName: title, description: paragraphs.join(" ") });
+    }
+  }
+  return rooms;
+}
+
 function showPlacementPreview({ img = "", size = 1 } = {}) {
   hidePlacementPreview();
   const px = canvas.grid.size * size;
@@ -721,6 +747,71 @@ async function runContextAction(action, entry, onRefresh) {
         console.error("DM Panic Button | Generate Art error:", err);
         ui.notifications.error("Could not reach AI server.");
       }
+      break;
+    }
+
+    case "generate-map": {
+      const rooms = extractRoomsFromJournal(doc);
+      if (!rooms.length) { ui.notifications.warn("No numbered rooms found in this journal."); break; }
+
+      const options = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
+      const dialog = new Dialog({
+        title: "🗺 Generate Battle Map",
+        content: `<div style="margin-bottom:8px">
+          <label style="color:#ccc0a0;display:block;margin-bottom:4px">Choose a room:</label>
+          <select id="panic-room-select" style="width:100%;padding:4px;background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b">${options}</select>
+        </div>`,
+        buttons: {
+          generate: {
+            label: "🗺 Generate",
+            callback: async (html) => {
+              const idx = parseInt(html.find("#panic-room-select").val());
+              const { roomName, description } = rooms[idx];
+              const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+
+              ui.notifications.info(`🗺 Generating battle map for "${roomName}"… (10–15 seconds)`);
+
+              try {
+                const res = await fetch(`${serverUrl}/generate-map`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ roomName, description }),
+                });
+
+                if (!res.ok) { ui.notifications.error(`Map generation failed: ${res.status}`); return; }
+
+                const { image } = await res.json();
+                if (!image) return;
+
+                // Upload image to Foundry user data
+                const blob = await fetch(image).then(r => r.blob());
+                const filename = `battle-map-${roomName.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}.jpg`;
+                const file = new File([blob], filename, { type: "image/jpeg" });
+                const result = await FilePicker.upload("data", "battle-maps", file, { notify: false });
+
+                // Create the scene
+                await Scene.create({
+                  name: roomName,
+                  background: { src: result.path },
+                  grid: { size: 100 },
+                  width: 1024,
+                  height: 1024,
+                  padding: 0,
+                });
+
+                ui.notifications.info(`✅ Scene "${roomName}" created! Open it from the Scenes tab.`);
+
+              } catch (err) {
+                console.error("DM Panic Button | Generate Map error:", err);
+                ui.notifications.error("Could not generate battle map.");
+              }
+            },
+          },
+          cancel: { label: "Cancel" },
+        },
+        default: "generate",
+      }, { width: 420 });
+      dialog.render(true);
       break;
     }
 
@@ -2143,7 +2234,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             : ""}
           ${game.settings.get("dm-panic-button", "aiChatbotEnabled")
             ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>
-               <button class="panic-btn panic-pill" data-action="generate-art" title="AI Generate Art (GM only)">🎨 Art</button>`
+               <button class="panic-btn panic-pill" data-action="generate-art" title="AI Generate Art (GM only)">🎨 Art</button>
+               ${entry.type === "Journal"
+                 ? `<button class="panic-btn panic-pill" data-action="generate-map" title="AI Generate Battle Map (GM only)">🗺 Map</button>`
+                 : ""}`
             : ""}
           <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>
         </div>

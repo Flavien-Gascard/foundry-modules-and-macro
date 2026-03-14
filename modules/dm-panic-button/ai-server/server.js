@@ -198,6 +198,52 @@ app.post('/generate-image', async (req, res) => {
   }
 });
 
+// ── /generate-map — top-down battle map from room description ─────────
+app.post('/generate-map', async (req, res) => {
+  const { roomName, description } = req.body;
+
+  if (!process.env.STABILITY_API_KEY) {
+    return res.status(500).json({ error: 'STABILITY_API_KEY not configured in .env' });
+  }
+
+  try {
+    const promptMsg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 40 words) for a top-down D&D battle map of "${roomName}". Context: ${(description || '').slice(0, 200)}. Style: top-down bird's eye view, grid-aligned dungeon tiles, detailed floor texture, no characters, fantasy tabletop RPG map. Output only the prompt.` }],
+    });
+    const mapPrompt = promptMsg.content[0].text.trim();
+    console.log(`🗺 Generating battle map for "${roomName}": ${mapPrompt}`);
+
+    const form = new FormData();
+    form.append('prompt', mapPrompt);
+    form.append('output_format', 'jpeg');
+    form.append('aspect_ratio', '1:1');
+
+    const stabilityRes = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Accept': 'image/*' },
+      body: form,
+    });
+
+    if (!stabilityRes.ok) {
+      const errText = await stabilityRes.text();
+      console.error('Stability AI error:', errText);
+      return res.status(500).json({ error: `Stability AI ${stabilityRes.status}: ${errText}` });
+    }
+
+    const buffer = await stabilityRes.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    logCost(`Battle map for "${roomName}"`, COSTS.imgPrompt + COSTS.image);
+
+    res.json({ image: `data:image/jpeg;base64,${base64}`, prompt: mapPrompt });
+
+  } catch (err) {
+    console.error('Map generation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.listen(PORT, () => {
