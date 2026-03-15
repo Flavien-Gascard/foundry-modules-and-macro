@@ -37,40 +37,75 @@ const TONE = {
   comedic:   "You are a bumbling but dangerous monster. Speak with unintentional comic menace.",
 };
 
-function buildPrompt(attackerName, attackerType, attackName, targetName, hit, tone) {
+const SIZE_LABEL = { tiny:'tiny', sm:'small', med:'medium', lg:'large', huge:'huge', grg:'gargantuan' };
+
+function buildPrompt(data) {
+  const {
+    attackerName, attackerType, attackName, targetName, hit, tone = 'menacing',
+    hpPct = 100, cr = null, alignment = '', intScore = 10, chaScore = 10,
+    immunities = [], resistances = [], conditionImmunities = [],
+    languages = [], size = 'med', specialAbilities = [],
+  } = data;
+
+  const isBeast = BEAST_TYPES.has(attackerType?.toLowerCase());
   const situation = hit
     ? `It just struck ${targetName} with its ${attackName}.`
     : `It just missed ${targetName} with its ${attackName}.`;
 
-  const isBeast = BEAST_TYPES.has(attackerType?.toLowerCase());
+  // Build context notes
+  const contextLines = [];
+  if (cr !== null)  contextLines.push(`Challenge Rating: ${cr} (${cr >= 10 ? 'apex predator — utterly confident' : cr >= 5 ? 'dangerous and experienced' : 'scrappy and aggressive'})`);
+  if (hpPct <= 25)  contextLines.push(`HP: ${hpPct}% — critically wounded, cornered and furious`);
+  else if (hpPct <= 50) contextLines.push(`HP: ${hpPct}% — bloodied, fighting harder`);
+  else              contextLines.push(`HP: ${hpPct}% — fresh and dominant`);
+  if (alignment)    contextLines.push(`Alignment: ${alignment}`);
+  if (SIZE_LABEL[size]) contextLines.push(`Size: ${SIZE_LABEL[size]}`);
+  if (immunities.length)  contextLines.push(`Immune to: ${immunities.join(', ')} (can mock enemies who use these)`);
+  if (resistances.length) contextLines.push(`Resistant to: ${resistances.join(', ')}`);
+  if (conditionImmunities.length) contextLines.push(`Cannot be: ${conditionImmunities.join(', ')} (utterly untouchable by those)`);
+  if (specialAbilities.length) contextLines.push(`Special abilities: ${specialAbilities.join(', ')}`);
+  if (languages.length && !isBeast) contextLines.push(`Speaks: ${languages.join(', ')}`);
+  if (intScore <= 6)  contextLines.push(`INT ${intScore}: very low — speak simply, no complex vocabulary`);
+  else if (intScore >= 16) contextLines.push(`INT ${intScore}: highly intelligent — can be eloquent or cunning`);
+  if (chaScore <= 6)  contextLines.push(`CHA ${chaScore}: brutish — crude, blunt, no flair`);
+  else if (chaScore >= 16) contextLines.push(`CHA ${chaScore}: magnetic — commanding, theatrical presence`);
+
+  const contextBlock = contextLines.length ? `\nCreature context:\n${contextLines.map(l => `- ${l}`).join('\n')}\n` : '';
 
   if (isBeast) {
+    const beastMood = hpPct <= 25 ? 'wounded and desperate' : hpPct <= 50 ? 'bloodied and frenzied' : 'dominant';
     return `You are narrating the behavior of ${attackerName}, a ${attackerType} that cannot speak.
 ${situation}
+Creature is ${beastMood}.${contextBlock}
 Describe 1 brief animalistic reaction — a sound, posture, or instinctive behavior (max 15 words).
-Write in third person. No dialogue. Examples: "It snaps its jaws and lets out a guttural snarl." or "It recoils, hissing, eyes locked on its prey."`;
+Write in third person. No dialogue. Make it visceral and specific to this creature type.
+Examples: "It snaps its jaws and lets out a guttural snarl." or "It recoils, hissing, eyes locked on its prey."`;
   }
 
   const toneInstruction = TONE[tone] || TONE.menacing;
   const speakSituation = hit
     ? `You just struck ${targetName} with your ${attackName}.`
     : `You just missed ${targetName} with your ${attackName}.`;
+  const moodHint = hpPct <= 25 ? 'You are gravely wounded — rage or desperation bleeds through your words.'
+    : hpPct <= 50 ? 'You are bloodied but unbowed.' : '';
 
   return `${toneInstruction}
 You are ${attackerName}, a ${attackerType}.
 ${speakSituation}
+${moodHint}${contextBlock}
 Say something in character — 1 short sentence, max 20 words.
+Reference your nature (abilities, what you're immune to, your power) if it fits naturally.
 No quotation marks. No stage directions. Just the spoken words.`;
 }
 
 app.post('/npc-taunt', async (req, res) => {
-  const { attackerName, attackerType, attackName, targetName, hit, tone = 'menacing' } = req.body;
-  const prompt = buildPrompt(attackerName, attackerType, attackName, targetName, hit, tone);
+  const { attackerName = 'unknown' } = req.body;
+  const prompt = buildPrompt(req.body);
 
   try {
     const message = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 80,
+      max_tokens: 100,
       messages: [{ role: 'user', content: prompt }],
     });
 
@@ -253,6 +288,80 @@ app.post('/generate-map', async (req, res) => {
 
   } catch (err) {
     console.error('Map generation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /chat — global DM assistant with intent detection ────────────────
+const INTENT_IMAGE = /\b(draw|sketch|paint|picture|image|art|illustrate|visualize)\b/i;
+const INTENT_BRIEF = /\b(brief me|briefing|give me a brief)\b/i;
+
+app.post('/chat', async (req, res) => {
+  const { messages = [], userMessage } = req.body;
+
+  if (!userMessage) return res.status(400).json({ error: 'userMessage required' });
+
+  try {
+    // ── Image intent ──
+    if (INTENT_IMAGE.test(userMessage)) {
+      if (!process.env.STABILITY_API_KEY) {
+        return res.status(500).json({ error: 'STABILITY_API_KEY not configured' });
+      }
+
+      const promptMsg = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 40 words) for a D&D fantasy illustration based on this request: "${userMessage}". Style: detailed fantasy art, dramatic lighting. Output only the prompt.` }],
+      });
+      const imagePrompt = promptMsg.content[0].text.trim();
+      console.log(`🎨 Chat image prompt: ${imagePrompt}`);
+
+      const form = new FormData();
+      form.append('prompt', imagePrompt);
+      form.append('output_format', 'jpeg');
+
+      const stabilityRes = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Accept': 'image/*' },
+        body: form,
+      });
+
+      if (!stabilityRes.ok) {
+        const errText = await stabilityRes.text();
+        return res.status(500).json({ error: `Stability AI ${stabilityRes.status}: ${errText}` });
+      }
+
+      const buffer = await stabilityRes.arrayBuffer();
+      const base64 = Buffer.from(buffer).toString('base64');
+      logCost(`Chat image`, COSTS.imgPrompt + COSTS.image);
+      return res.json({ type: 'image', image: `data:image/jpeg;base64,${base64}`, prompt: imagePrompt });
+    }
+
+    // ── Brief intent ──
+    if (INTENT_BRIEF.test(userMessage)) {
+      const briefMsg = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `You are a D&D 5e expert helping a Dungeon Master run a game right now. The DM asked: "${userMessage}". Give a concise 3-4 bullet DM briefing covering the most useful table-ready info. Be punchy — this is a quick reference card.` }],
+      });
+      const text = briefMsg.content[0].text.trim();
+      logCost(`Chat brief`, COSTS.brief);
+      return res.json({ type: 'brief', text });
+    }
+
+    // ── Text / conversation ──
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      system: 'You are a helpful D&D 5e Dungeon Master assistant. Answer concisely. Help the DM run their game at the table right now.',
+      messages: [...messages, { role: 'user', content: userMessage }],
+    });
+    const text = response.content[0].text.trim();
+    logCost(`Chat text`, COSTS.brief);
+    return res.json({ type: 'text', text });
+
+  } catch (err) {
+    console.error('Chat API error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

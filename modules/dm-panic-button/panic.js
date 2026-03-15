@@ -816,7 +816,7 @@ async function runContextAction(action, entry, onRefresh) {
                 if (!image) return;
 
                 const blob = await fetch(image).then(r => r.blob());
-                const filename = `battle-map-${roomName.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}.jpg`;
+                const filename = `battle-map-${roomName.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${Date.now()}.jpg`;
                 const file = new File([blob], filename, { type: "image/jpeg" });
                 const result = await FilePicker.upload("data", "battle-maps", file, { notify: false });
 
@@ -1321,6 +1321,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     // Always insert a horizontal line between filters and search bar
     html.find('#panic-type-search-hr').remove();
     html.find('#panic-filter-container').after('<hr id="panic-type-search-hr" style="border:0;border-top:1.5px solid #bfa046;margin:8px 0 4px 0;">');
+
+    // 🤖 Ask AI button (only when AI is enabled)
+    if (game.settings.get("dm-panic-button", "aiChatbotEnabled")) {
+      html.find('#panic-filter-container').before(
+        $(`<button id="panic-global-ai-chat" class="panic-btn" style="width:100%;margin-bottom:6px;background:#1a1a2e;color:#c9a84c;border:1px solid #5a3e1b;padding:4px;cursor:pointer;font-size:0.95em;">🤖 Ask AI</button>`)
+      );
+    }
 
     // Create bar (inserted once between HR and search)
     if (!html.find('#panic-create-bar').length) {
@@ -2616,6 +2623,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   // Remove the old dropdown if present
   html.find("#panic-type-filter").remove();
   input.on("input", doSearch);
+
+  // 🤖 Ask AI global chat button
+  html.find("#panic-global-ai-chat").on("click", () => {
+    const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+    openAiChatDialog(serverUrl);
+  });
+
   setTimeout(()=>input.focus(),50);
 });
 
@@ -2627,6 +2641,104 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
  * ================================================= */
 
 console.log("🤖 DM Panic Button | AI NPC Chatbot ready");
+
+// ── Global AI Chat ────────────────────────────────
+let _aiChatHistory = []; // persists across dialog opens
+
+function openAiChatDialog(serverUrl) {
+  const IS = "background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b;";
+
+  function bubbleHtml(role, content) {
+    const isUser = role === "user";
+    const bg     = isUser ? "#1a2e1a" : "#1a1a2e";
+    const color  = isUser ? "#88c088" : "#ccc0a0";
+    const align  = isUser ? "right" : "left";
+    const label  = isUser ? "You" : "🤖 AI";
+    return `<div style="margin-bottom:8px;text-align:${align}">
+      <div style="display:inline-block;max-width:85%;text-align:left;background:${bg};color:${color};border:1px solid #5a3e1b;border-radius:4px;padding:6px 8px;font-size:0.9em">
+        <strong style="color:#c9a84c;display:block;margin-bottom:2px">${label}</strong>
+        ${content}
+      </div>
+    </div>`;
+  }
+
+  const chatDialog = new Dialog({
+    title: "🤖 DM AI Assistant",
+    content: `<div style="display:flex;flex-direction:column;gap:6px;width:100%">
+      <div id="ai-chat-history" style="height:300px;overflow-y:auto;${IS}border-radius:4px;padding:8px"></div>
+      <input id="ai-chat-input" type="text" placeholder="Ask anything... ('draw X', 'brief me on Y')" style="width:100%;box-sizing:border-box;${IS}padding:6px;border-radius:3px"/>
+      <div style="display:flex;gap:4px">
+        <button id="ai-chat-send" style="flex:1;background:#1a2e3e;color:#c9a84c;border:1px solid #5a3e1b;padding:6px;cursor:pointer">Send ↵</button>
+        <button id="ai-chat-clear" title="Clear history" style="background:#3a1a1a;color:#e05050;border:1px solid #5a1b1b;padding:6px 10px;cursor:pointer">🗑</button>
+      </div>
+    </div>`,
+    buttons: { close: { label: "Close" } },
+    default: "close",
+    render: (html) => {
+      // Render existing history
+      const histDiv = html.find("#ai-chat-history");
+      _aiChatHistory.forEach(m => histDiv.append(bubbleHtml(m.role, m.content)));
+      histDiv[0].scrollTop = histDiv[0].scrollHeight;
+
+      async function sendMessage() {
+        const input = html.find("#ai-chat-input");
+        const msg = input.val().trim();
+        if (!msg) return;
+        input.val("").prop("disabled", true);
+        html.find("#ai-chat-send").prop("disabled", true);
+
+        _aiChatHistory.push({ role: "user", content: msg });
+        histDiv.append(bubbleHtml("user", msg));
+
+        const thinking = $(`<div id="ai-thinking" style="color:#666;font-style:italic;font-size:0.85em;margin-bottom:6px">⏳ Thinking…</div>`);
+        histDiv.append(thinking);
+        histDiv[0].scrollTop = histDiv[0].scrollHeight;
+
+        try {
+          const res = await fetch(`${serverUrl}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: _aiChatHistory, userMessage: msg }),
+          });
+
+          thinking.remove();
+
+          if (!res.ok) {
+            histDiv.append(bubbleHtml("assistant", `<span style="color:#e05050">Error ${res.status} from AI server.</span>`));
+          } else {
+            const { type, text, image, prompt } = await res.json();
+            if (type === "image") {
+              const imgHtml = `<img src="${image}" style="max-width:100%;border-radius:4px;margin-top:4px"/><br/><em style="color:#888;font-size:0.8em">${prompt}</em>`;
+              histDiv.append(bubbleHtml("assistant", imgHtml));
+              _aiChatHistory.push({ role: "assistant", content: `[Generated image: ${prompt}]` });
+            } else {
+              const formatted = (text || "").split("\n").filter(Boolean).map(l => `<p style="margin:2px 0">${l}</p>`).join("");
+              histDiv.append(bubbleHtml("assistant", formatted));
+              _aiChatHistory.push({ role: "assistant", content: text });
+            }
+          }
+        } catch (err) {
+          thinking.remove();
+          histDiv.append(bubbleHtml("assistant", `<span style="color:#e05050">Could not reach AI server.</span>`));
+          console.error("DM Panic Button | AI Chat error:", err);
+        }
+
+        histDiv[0].scrollTop = histDiv[0].scrollHeight;
+        input.prop("disabled", false).focus();
+        html.find("#ai-chat-send").prop("disabled", false);
+      }
+
+      html.find("#ai-chat-send").on("click", sendMessage);
+      html.find("#ai-chat-input").on("keydown", (ev) => { if (ev.key === "Enter") sendMessage(); });
+      html.find("#ai-chat-clear").on("click", () => {
+        _aiChatHistory = [];
+        histDiv.empty();
+      });
+    },
+  }, { width: 520, height: "auto" });
+
+  chatDialog.render(true);
+}
 
 // ── Settings ─────────────────────────────────────
 Hooks.once("ready", () => {
@@ -2683,13 +2795,33 @@ async function _aiNpcTaunt(actor, attackName, hit, targetName) {
     || actor.system?.details?.type?.value
     || "creature";
 
-  console.log(`🤖 AI Chatbot | calling server — ${attackerName} ${hit ? "hit" : "missed"} ${targetName}`);
+  // Rich actor context for more dramatic taunts
+  const hp       = actor.system?.attributes?.hp;
+  const hpPct    = hp?.max > 0 ? Math.round((hp.value / hp.max) * 100) : 100;
+  const cr       = actor.system?.details?.cr ?? null;
+  const alignment = actor.system?.details?.alignment || "";
+  const intScore = actor.system?.abilities?.int?.value ?? 10;
+  const chaScore = actor.system?.abilities?.cha?.value ?? 10;
+  const immunities  = actor.system?.traits?.di?.value  || [];
+  const resistances = actor.system?.traits?.dr?.value  || [];
+  const conditionImmunities = actor.system?.traits?.ci?.value || [];
+  const languages   = actor.system?.traits?.languages?.value || [];
+  const size        = actor.system?.traits?.size || "med";
+  const specialAbilities = (actor.items || [])
+    .filter(i => i.type === "feat")
+    .map(i => i.name);
+
+  console.log(`🤖 AI Chatbot | calling server — ${attackerName} ${hit ? "hit" : "missed"} ${targetName} (HP: ${hpPct}%, CR: ${cr})`);
 
   try {
     const res = await fetch(`${serverUrl}/npc-taunt`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attackerName, attackerType, attackName, damage: 0, targetName, hit, tone }),
+      body: JSON.stringify({
+        attackerName, attackerType, attackName, targetName, hit, tone,
+        hpPct, cr, alignment, intScore, chaScore,
+        immunities, resistances, conditionImmunities, languages, size, specialAbilities,
+      }),
     });
 
     if (!res.ok) { console.warn(`DM Panic Button | AI server responded ${res.status}`); return; }
