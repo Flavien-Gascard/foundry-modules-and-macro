@@ -1,0 +1,54 @@
+name: Release DM Panic Button
+
+on:
+  push:
+    tags:
+      - "dm-panic-button-v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#dm-panic-button-v}" >> $GITHUB_OUTPUT
+
+      - name: Update version in module.json
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" modules/dm-panic-button/module.json
+          sed -i "s|dm-panic-button-v[0-9.]*|dm-panic-button-v$VERSION|g" modules/dm-panic-button/module.json
+
+      - name: Create zip
+        run: |
+          cd modules
+          zip -r ../dm-panic-button.zip dm-panic-button/ \
+            --exclude "*.git*" \
+            --exclude "*node_modules*" \
+            --exclude "*.DS_Store" \
+            --exclude "dm-panic-button/ai-server/*"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "DM Panic Button v${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## DM Panic Button v${{ steps.version.outputs.VERSION }}
+
+            ### Install in Foundry VTT
+            Manifest URL:
+            ```
+            https://raw.githubusercontent.com/Flavien-Gascard/foundry-modules-and-macro/main/modules/dm-panic-button/module.json
+            ```
+
+            > **Note:** The AI chatbot feature requires the local AI server (`ai-server/`) to be running separately. See the README for setup instructions.
+          files: |
+            dm-panic-button.zip
+            modules/dm-panic-button/module.json
