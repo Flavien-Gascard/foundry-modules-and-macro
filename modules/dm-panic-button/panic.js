@@ -219,6 +219,7 @@ export class DMPanicButton extends Application {
       resizable: true
     });
   }
+
 }
 
 Hooks.once("ready", async () => {
@@ -331,10 +332,18 @@ function extractRoomsFromJournal(doc) {
       const paragraphs = [];
       let sibling = heading.nextElementSibling;
       while (sibling && !["H1","H2","H3"].includes(sibling.tagName)) {
-        if (sibling.tagName === "P") paragraphs.push(sibling.textContent.trim());
+        if (sibling.tagName === "P" && !sibling.classList.contains("secret")) paragraphs.push(sibling.textContent.trim());
         sibling = sibling.nextElementSibling;
       }
-      rooms.push({ pageId: page._id, pageName: page.name, roomName: title, description: paragraphs.join(" ") });
+      // Build player-safe HTML: strip <section class="secret"> and <p class="secret"> blocks
+      const roomDiv = document.createElement("div");
+      let node = heading.nextElementSibling;
+      while (node && !["H1","H2","H3"].includes(node.tagName)) {
+        if (!node.classList.contains("secret")) roomDiv.appendChild(node.cloneNode(true));
+        node = node.nextElementSibling;
+      }
+      roomDiv.querySelectorAll(".secret").forEach(el => el.remove());
+      rooms.push({ pageId: page._id, pageName: page.name, roomName: title, description: paragraphs.join(" "), safeHtml: roomDiv.innerHTML });
     }
   }
   return rooms;
@@ -722,6 +731,32 @@ async function runContextAction(action, entry, onRefresh) {
         const { image, prompt } = await res.json();
         if (!image) break;
 
+        // Upload image to Foundry and save to "Images" journal folder
+        const artBlob   = await fetch(image).then(r => r.blob());
+        const artFile   = new File([artBlob], `art-${doc.name.replace(/[^a-z0-9]/gi,"-").toLowerCase()}-${Date.now()}.png`, { type:"image/png" });
+        const _forgeArt = typeof ForgeVTT !== "undefined" && ForgeVTT.usingTheForge;
+        const artUpload = await FilePicker.upload(_forgeArt ? "forgevtt" : "data", _forgeArt ? "Assets/images/panic-button" : "art-images", artFile, { notify:false });
+
+        // Find or create the "Images" journal folder
+        let imgFolder = game.folders.find(f => f.type === "JournalEntry" && f.name === "Images");
+        if (!imgFolder) imgFolder = await Folder.create({ name:"Images", type:"JournalEntry", color:"#5a3e1b" });
+
+        // Create journal entry in that folder
+        await JournalEntry.create({
+          name: doc.name,
+          folder: imgFolder.id,
+          ownership: { default: 2 },
+          pages: [{
+            name: doc.name,
+            type: "text",
+            text: { format: 1, content:
+              `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b;padding-bottom:6px">${doc.name}</h2>
+               <img src="${artUpload.path}" style="width:100%;border-radius:4px"/>
+               <p style="color:#888;font-size:0.8em;margin-top:6px;font-style:italic">${prompt}</p>`,
+            },
+          }],
+        });
+
         new Dialog({
           title: `🎨 ${doc.name}`,
           content: `<div style="text-align:center">
@@ -733,7 +768,7 @@ async function runContextAction(action, entry, onRefresh) {
               label: "🖼 Show Players",
               callback: () => {
                 ChatMessage.create({
-                  content: `<div style="text-align:center"><strong style="color:#c9a84c">${doc.name}</strong><br/><img src="${image}" style="max-width:100%;border-radius:4px;margin-top:6px"/></div>`,
+                  content: `<div style="text-align:center"><strong style="color:#c9a84c">${doc.name}</strong><br/><img src="${artUpload.path}" style="max-width:100%;border-radius:4px;margin-top:6px"/></div>`,
                   whisper: [],
                 });
               },
@@ -754,103 +789,75 @@ async function runContextAction(action, entry, onRefresh) {
       const rooms = extractRoomsFromJournal(doc);
       if (!rooms.length) { ui.notifications.warn("No numbered rooms found in this journal."); break; }
 
-      const S = "background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b;padding:2px;";
-      const roomOpts  = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
-      const spaceOpts = [["room","Room (enclosed)"],["cavern","Cavern (natural cave)"],["corridor","Corridor (narrow passage)"],["open","Open Area (no walls)"],["chamber","Chamber (large hall)"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-      const dirOpts   = ["N","NE","E","SE","S","SW","W","NW"].map(d=>`<option value="${d}">${d}</option>`).join("");
-      const typeOpts  = [["wooden-door","Wooden Door"],["iron-door","Iron Door"],["secret-door","Secret Door"],["archway","Archway"],["portcullis","Portcullis"],["locked-door","Locked Door"],["stairs-up","Stairs Up"],["stairs-down","Stairs Down"],["rubble","Collapsed/Rubble"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-      const stateOpts = [["closed","Closed"],["open","Open"],["locked","Locked"],["hidden","Hidden"]].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
-      const makeExitRow = () => `<div class="panic-exit-row" style="display:flex;gap:4px;margin-bottom:4px;align-items:center">
-        <select class="exit-dir"   style="${S}width:52px">${dirOpts}</select>
-        <select class="exit-type"  style="${S}flex:1">${typeOpts}</select>
-        <select class="exit-state" style="${S}width:76px">${stateOpts}</select>
-        <button class="exit-remove" style="background:#3a1a1a;color:#e05050;border:1px solid #5a1b1b;padding:2px 6px;cursor:pointer">✕</button>
-      </div>`;
+      const roomOpts = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
 
+      const IS = "background:#12100e;color:#ccc0a0;border:1px solid #5a3e1b;padding:4px 6px;border-radius:3px;width:100%;box-sizing:border-box";
       const mapDialog = new Dialog({
-        title: "🗺 Generate Battle Map",
-        content: `<div style="color:#ccc0a0;font-size:0.95em">
-          <div style="margin-bottom:8px">
-            <label style="display:block;margin-bottom:3px">Room:</label>
-            <select id="panic-room-select" style="width:100%;${S}">${roomOpts}</select>
+        title: "📖 Illustrate Room",
+        content: `
+        <style>
+          #pmw { font-family:inherit;color:#ccc0a0;font-size:0.93em }
+          #pmw .ms { background:#1a1208;border:1px solid #5a3e1b;border-radius:5px;padding:10px 12px;margin-bottom:8px }
+          #pmw .mt { color:#c9a84c;font-size:0.76em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px;border-bottom:1px solid #3a2510;padding-bottom:3px }
+          #pmw select, #pmw input[type=text] { ${IS} }
+          #pmw select:focus, #pmw input:focus { outline:none;border-color:#c9a84c }
+        </style>
+        <div id="pmw">
+          <div class="ms">
+            <div class="mt">📍 Room</div>
+            <select id="pm-room" style="width:100%">${roomOpts}</select>
           </div>
-          <div style="margin-bottom:8px">
-            <label style="display:block;margin-bottom:3px">Space Type:</label>
-            <select id="panic-space-type" style="width:100%;${S}">${spaceOpts}</select>
-          </div>
-          <div>
-            <label style="display:block;margin-bottom:3px">Exits / Doors:</label>
-            <div id="panic-exits"></div>
-            <button id="panic-add-exit" style="width:100%;margin-top:4px;background:#1a2e1a;color:#88c088;border:1px solid #3a5e3a;padding:3px;cursor:pointer">+ Add Exit</button>
+          <div class="ms">
+            <div class="mt">🎨 Style Hint <span style="color:#6a5a3a;font-size:0.85em;text-transform:none;letter-spacing:0">(optional — e.g. "flooded", "on fire", "ancient evil")</span></div>
+            <input type="text" id="pm-hint" placeholder="Leave blank to use room description only"/>
           </div>
         </div>`,
         buttons: {
           generate: {
-            label: "🗺 Generate",
+            label: "📖 Illustrate",
             callback: async (html) => {
-              const idx       = parseInt(html.find("#panic-room-select").val());
-              const spaceType = html.find("#panic-space-type").val();
-              const { roomName, description } = rooms[idx];
-              const exits = [];
-              html.find(".panic-exit-row").each((_, row) => {
-                exits.push({
-                  direction: $(row).find(".exit-dir").val(),
-                  doorType:  $(row).find(".exit-type").val(),
-                  state:     $(row).find(".exit-state").val(),
-                });
-              });
-
+              const idx      = parseInt(html.find("#pm-room").val());
+              const hint     = html.find("#pm-hint").val().trim();
+              const { roomName, description, safeHtml } = rooms[idx];
               const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
-              ui.notifications.info(`🗺 Generating battle map for "${roomName}"… (10–15 seconds)`);
 
+              ui.notifications.info(`🌄 Generating scene for "${roomName}"… (10–15 seconds)`);
               try {
                 const res = await fetch(`${serverUrl}/generate-map`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ roomName, description, spaceType, exits }),
+                  body: JSON.stringify({ roomName, description, hint }),
                 });
-
-                if (!res.ok) { ui.notifications.error(`Map generation failed: ${res.status}`); return; }
-
+                if (!res.ok) { ui.notifications.error(`Scene generation failed: ${res.status}`); return; }
                 const { image } = await res.json();
                 if (!image) return;
-
                 const blob = await fetch(image).then(r => r.blob());
-                const filename = `battle-map-${roomName.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${Date.now()}.jpg`;
-                const file = new File([blob], filename, { type: "image/jpeg" });
-                const result = await FilePicker.upload("data", "battle-maps", file, { notify: false });
+                const filename = `scene-${roomName.replace(/[^a-z0-9]/gi,"-").replace(/^-+|-+$/g,"").toLowerCase()}-${Date.now()}.jpg`;
+                const file = new File([blob], filename, { type:"image/jpeg" });
+                const _forgeScene = typeof ForgeVTT !== "undefined" && ForgeVTT.usingTheForge;
+                const result = await FilePicker.upload(_forgeScene ? "forgevtt" : "data", _forgeScene ? "Assets/journals" : "battle-maps", file, { notify:false });
 
-                await Scene.create({
+                const pageHtml = `
+                  <h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b;padding-bottom:6px">${roomName}</h2>
+                  <img src="${result.path}" style="width:100%;border-radius:4px;margin-bottom:12px"/>
+                  <div style="color:#ccc0a0;font-size:1.1em;line-height:1.8">${safeHtml}</div>`;
+
+                await JournalEntry.create({
                   name: roomName,
-                  background: { src: result.path },
-                  grid: { size: 100 },
-                  width: 1024,
-                  height: 1024,
-                  padding: 0,
+                  ownership: { default: 2 },
+                  pages: [{ name: roomName, type: "text", text: { content: pageHtml, format: 1 } }],
                 });
-
-                ui.notifications.info(`✅ Scene "${roomName}" created! Open it from the Scenes tab.`);
-
-              } catch (err) {
-                console.error("DM Panic Button | Generate Map error:", err);
-                ui.notifications.error("Could not generate battle map.");
+                ui.notifications.info(`✅ Journal "${roomName}" created with scene image!`);
+              } catch(err) {
+                console.error("DM Panic Button | Generate Scene error:", err);
+                ui.notifications.error("Could not generate scene.");
               }
             },
           },
           cancel: { label: "Cancel" },
         },
         default: "generate",
-        render: (html) => {
-          html.find("#panic-exits").on("click", ".exit-remove", function(ev) {
-            ev.preventDefault();
-            $(this).closest(".panic-exit-row").remove();
-          });
-          html.find("#panic-add-exit").on("click", (ev) => {
-            ev.preventDefault();
-            html.find("#panic-exits").append(makeExitRow());
-          });
-        },
-      }, { width: 480 });
+      }, { width: 420 });
       mapDialog.render(true);
       break;
     }
@@ -989,10 +996,23 @@ function openCreateItemDialog(onCreated) {
   }
 
   const content = `
-    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+    <style>
+      .pcf { display:flex;flex-direction:column;gap:10px;padding:6px 2px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf-wrap { background:#1a1208;border:1px solid #5a3e1b;border-radius:6px;padding:14px;margin:-4px }
+      .pcf { display:flex;flex-direction:column;gap:10px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf label { color:#c9a84c;font-size:0.78em;text-transform:uppercase;letter-spacing:.08em;font-family:'Papyrus',serif }
+      .pcf input,.pcf select {
+        background:#0d0b09;color:#ccc0a0;border:1px solid #5a3e1b;
+        padding:5px 8px;border-radius:4px;width:100%;box-sizing:border-box;font-size:0.95em }
+      .pcf input:focus,.pcf select:focus { outline:none;border-color:#c9a84c;box-shadow:0 0 6px rgba(201,168,106,0.3) }
+      .pcf input::placeholder { color:#5a4a30 }
+    </style>
+    <div class="pcf-wrap"><form class="pcf">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" name="name" placeholder="Item name" style="width:100%" autofocus />
+        <input type="text" name="name" placeholder="Item name" autofocus />
       </div>
       <div class="form-group">
         <label>Type</label>
@@ -1012,7 +1032,7 @@ function openCreateItemDialog(onCreated) {
           ${rarities.map(r => `<option value="${r.value}">${r.label}</option>`).join("")}
         </select>
       </div>
-    </form>`;
+    </form></div>`;
 
   new Dialog({
     title: "Create New Item",
@@ -1065,10 +1085,23 @@ function openCreateActorDialog(onCreated) {
   const crLabel = cr => ({ 0.125: "1/8", 0.25: "1/4", 0.5: "1/2" }[cr] ?? String(cr));
 
   const content = `
-    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+    <style>
+      .pcf { display:flex;flex-direction:column;gap:10px;padding:6px 2px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf-wrap { background:#1a1208;border:1px solid #5a3e1b;border-radius:6px;padding:14px;margin:-4px }
+      .pcf { display:flex;flex-direction:column;gap:10px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf label { color:#c9a84c;font-size:0.78em;text-transform:uppercase;letter-spacing:.08em;font-family:'Papyrus',serif }
+      .pcf input,.pcf select {
+        background:#0d0b09;color:#ccc0a0;border:1px solid #5a3e1b;
+        padding:5px 8px;border-radius:4px;width:100%;box-sizing:border-box;font-size:0.95em }
+      .pcf input:focus,.pcf select:focus { outline:none;border-color:#c9a84c;box-shadow:0 0 6px rgba(201,168,106,0.3) }
+      .pcf input::placeholder { color:#5a4a30 }
+    </style>
+    <div class="pcf-wrap"><form class="pcf">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" name="name" placeholder="Actor name" style="width:100%" autofocus />
+        <input type="text" name="name" placeholder="Actor name" autofocus />
       </div>
       <div class="form-group">
         <label>Type</label>
@@ -1089,7 +1122,7 @@ function openCreateActorDialog(onCreated) {
           ${crValues.map(cr => `<option value="${cr}">CR ${crLabel(cr)}</option>`).join("")}
         </select>
       </div>
-    </form>`;
+    </form></div>`;
 
   new Dialog({
     title: "Create New Actor",
@@ -1145,13 +1178,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       clearTimeout(collapseTimer);
       collapseTimer = setTimeout(() => {
         if (!app._minimized) app.minimize();
-      }, 600);
+      }, 2000);
     });
 
-    // Collapse immediately on first render if mouse isn't over it
+    // Collapse on first render if mouse isn't over it
     collapseTimer = setTimeout(() => {
       if (!app._minimized) app.minimize();
-    }, 1000);
+    }, 2000);
     
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
@@ -2283,7 +2316,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
             ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>
                <button class="panic-btn panic-pill" data-action="generate-art" title="AI Generate Art (GM only)">🎨 Art</button>
                ${entry.type === "Journal"
-                 ? `<button class="panic-btn panic-pill" data-action="generate-map" title="AI Generate Battle Map (GM only)">🗺 Map</button>`
+                 ? `<button class="panic-btn panic-pill" data-action="generate-map" title="AI Generate Room Journal (GM only)">📖 Illustrate</button>`
                  : ""}`
             : ""}
           <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>

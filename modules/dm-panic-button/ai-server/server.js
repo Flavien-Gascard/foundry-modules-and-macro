@@ -26,8 +26,11 @@ function logCost(label, cost) {
 
 // Creature types that cannot speak — describe their sounds/behavior instead
 const BEAST_TYPES = new Set([
-  'beast', 'monstrosity', 'ooze', 'plant', 'swarm',
+  'beast', 'ooze', 'plant', 'swarm',
 ]);
+
+// Monstrosities and aberrations MAY speak if INT >= this threshold
+const SPEECH_INT_THRESHOLD = 8;
 
 // Tone prompts for speaking creatures
 const TONE = {
@@ -47,7 +50,9 @@ function buildPrompt(data) {
     languages = [], size = 'med', specialAbilities = [],
   } = data;
 
-  const isBeast = BEAST_TYPES.has(attackerType?.toLowerCase());
+  const type = attackerType?.toLowerCase();
+  const isBeast = BEAST_TYPES.has(type)
+    || ((type === 'monstrosity' || type === 'aberration') && intScore < SPEECH_INT_THRESHOLD);
   const situation = hit
     ? `It just struck ${targetName} with its ${attackName}.`
     : `It just missed ${targetName} with its ${attackName}.`;
@@ -64,7 +69,7 @@ function buildPrompt(data) {
   if (resistances.length) contextLines.push(`Resistant to: ${resistances.join(', ')}`);
   if (conditionImmunities.length) contextLines.push(`Cannot be: ${conditionImmunities.join(', ')} (utterly untouchable by those)`);
   if (specialAbilities.length) contextLines.push(`Special abilities: ${specialAbilities.join(', ')}`);
-  if (languages.length && !isBeast) contextLines.push(`Speaks: ${languages.join(', ')}`);
+  if (languages.length && !isBeast) contextLines.push(`Speaks: ${languages.join(', ')} — use the cadence and flavor of that language/culture`);
   if (intScore <= 6)  contextLines.push(`INT ${intScore}: very low — speak simply, no complex vocabulary`);
   else if (intScore >= 16) contextLines.push(`INT ${intScore}: highly intelligent — can be eloquent or cunning`);
   if (chaScore <= 6)  contextLines.push(`CHA ${chaScore}: brutish — crude, blunt, no flair`);
@@ -185,7 +190,7 @@ async function buildImagePrompt(name, category, subtype, bio) {
   const message = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 100,
-    messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 40 words) for a D&D fantasy illustration of ${subject}.${bio ? ` Context: ${bio.slice(0, 150)}` : ''} Style: detailed fantasy art, dramatic lighting. Output only the prompt.` }],
+    messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 50 words) for a traditional D&D fantasy illustration of ${subject}.${bio ? ` Context: ${bio.slice(0, 150)}` : ''} Style: official D&D 5e Monster Manual art style, painterly fantasy illustration, dramatic lighting, rich colors, detailed, high fantasy. No photorealism, no anime. Output only the prompt.` }],
   });
 
   return message.content[0].text.trim();
@@ -204,14 +209,12 @@ app.post('/generate-image', async (req, res) => {
 
     const form = new FormData();
     form.append('prompt', imagePrompt);
-    form.append('output_format', 'jpeg');
+    form.append('negative_prompt', 'photorealistic, photograph, anime, manga, cartoon, 3D render, CGI, modern, sci-fi, watermark, text, blurry, low quality');
+    form.append('output_format', 'png');
 
     const stabilityRes = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
-        'Accept': 'image/*',
-      },
+      headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Accept': 'image/*' },
       body: form,
     });
 
@@ -221,11 +224,25 @@ app.post('/generate-image', async (req, res) => {
       return res.status(500).json({ error: `Stability AI ${stabilityRes.status}: ${errText}` });
     }
 
-    const buffer = await stabilityRes.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString('base64');
-    logCost(`Image for "${name}"`, COSTS.imgPrompt + COSTS.image);
+    // Remove background → transparent PNG
+    const genBuffer = await stabilityRes.arrayBuffer();
+    const bgForm = new FormData();
+    bgForm.append('image', new Blob([genBuffer], { type: 'image/png' }), 'art.png');
+    bgForm.append('output_format', 'png');
 
-    res.json({ image: `data:image/jpeg;base64,${base64}`, prompt: imagePrompt });
+    const bgRes = await fetch('https://api.stability.ai/v2beta/stable-image/edit/remove-background', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Accept': 'image/*' },
+      body: bgForm,
+    });
+
+    const finalBuffer = bgRes.ok ? await bgRes.arrayBuffer() : genBuffer;
+    if (!bgRes.ok) console.warn('Remove-background failed, using original image');
+
+    const base64 = Buffer.from(finalBuffer).toString('base64');
+    logCost(`Image for "${name}"`, COSTS.imgPrompt + COSTS.image + 0.02);
+
+    res.json({ image: `data:image/png;base64,${base64}`, prompt: imagePrompt });
 
   } catch (err) {
     console.error('Image generation error:', err.message);
@@ -233,40 +250,38 @@ app.post('/generate-image', async (req, res) => {
   }
 });
 
-// ── /generate-map — top-down battle map from room description ─────────
-const SPACE_LABELS = {
-  room:     'enclosed stone dungeon room',
-  cavern:   'natural cave cavern with rough rocky walls',
-  corridor: 'narrow dungeon corridor passage',
-  open:     'open area with minimal walls',
-  chamber:  'large grand chamber hall',
-};
-
+// ── /generate-map — cinematic scene background from room description ───
 app.post('/generate-map', async (req, res) => {
-  const { roomName, description, spaceType = 'room', exits = [] } = req.body;
+  const { roomName, description, hint } = req.body;
 
   if (!process.env.STABILITY_API_KEY) {
     return res.status(500).json({ error: 'STABILITY_API_KEY not configured in .env' });
   }
 
-  const spaceLabel = SPACE_LABELS[spaceType] || 'dungeon room';
-  const exitDesc = exits.length > 0
-    ? 'Exits: ' + exits.map(e => `${e.doorType.replace(/-/g,' ')} on ${e.direction} wall (${e.state})`).join(', ')
-    : '';
-
   try {
+    const hintLine = hint ? ` Additional mood/style: ${hint}.` : '';
+    const claudePrompt = `You are generating a Stable Diffusion prompt for a cinematic fantasy scene background image.
+Room name: "${roomName}"
+Description: ${(description || '').slice(0, 2500)}${hintLine}
+
+Write a vivid Stable Diffusion prompt (max 80 words) for a wide cinematic establishing shot of this location.
+Focus on atmosphere, lighting, mood, and key visual elements from the description.
+Style: official D&D 5e environment art style, painterly high fantasy illustration, rich dramatic lighting, detailed stonework and textures, reminiscent of D&D sourcebook art by artists like Tyler Jacobson and Chris Rahn, no characters, no people.
+Output only the prompt, nothing else.`;
+
     const promptMsg = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 120,
-      messages: [{ role: 'user', content: `Write a Stable Diffusion image prompt (max 50 words) for a top-down D&D battle map. Location: "${roomName}" (${spaceLabel}). Context: ${(description || '').slice(0, 150)}${exitDesc ? '. ' + exitDesc : ''}. Style: top-down bird's eye view, grid-aligned dungeon tiles, detailed floor texture, no characters, fantasy tabletop RPG map. Output only the prompt.` }],
+      max_tokens: 150,
+      messages: [{ role: 'user', content: claudePrompt }],
     });
-    const mapPrompt = promptMsg.content[0].text.trim();
-    console.log(`🗺 Generating battle map for "${roomName}": ${mapPrompt}`);
+    const scenePrompt = promptMsg.content[0].text.trim();
+    console.log(`🌄 Generating scene for "${roomName}": ${scenePrompt}`);
 
     const form = new FormData();
-    form.append('prompt', mapPrompt);
+    form.append('prompt', scenePrompt);
+    form.append('negative_prompt', 'photorealistic, photograph, anime, manga, cartoon, 3D render, CGI, modern, sci-fi, characters, people, monsters, text, watermark, blurry, low quality, diagram, map, top-down, isometric');
     form.append('output_format', 'jpeg');
-    form.append('aspect_ratio', '1:1');
+    form.append('aspect_ratio', '16:9');
 
     const stabilityRes = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
       method: 'POST',
@@ -282,9 +297,9 @@ app.post('/generate-map', async (req, res) => {
 
     const buffer = await stabilityRes.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
-    logCost(`Battle map for "${roomName}"`, COSTS.imgPrompt + COSTS.image);
+    logCost(`Scene for "${roomName}"`, COSTS.imgPrompt + COSTS.image);
 
-    res.json({ image: `data:image/jpeg;base64,${base64}`, prompt: mapPrompt });
+    res.json({ image: `data:image/jpeg;base64,${base64}`, prompt: scenePrompt });
 
   } catch (err) {
     console.error('Map generation error:', err.message);

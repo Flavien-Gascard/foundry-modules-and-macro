@@ -1,3 +1,6 @@
+/* Hide manual minimize button — collapse is controlled by hover timer only */
+#dm-panic-button .header-button.minimize { display: none !important; }
+
 /* ================================
    Subtype & Sub-Subtype Menus
 ================================ */
@@ -53,6 +56,14 @@ button.panic-pill:hover, .panic-pill:hover, .panic-category-btn:hover, .panic-su
   --panic-glow: rgba(201,168,106,0.45);
   --panic-border: rgba(201,168,106,0.35);
   --panic-text: #e6dcc6;
+}
+
+.window-app#dm-panic-button {
+  opacity: 0.65;
+}
+
+.window-app#dm-panic-button .header-button.minimize {
+  display: none !important;
 }
 
 .window-app#dm-panic-button .window-content {
