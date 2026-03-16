@@ -219,6 +219,7 @@ export class DMPanicButton extends Application {
       resizable: true
     });
   }
+
 }
 
 Hooks.once("ready", async () => {
@@ -313,6 +314,40 @@ function getDocumentDescription(doc) {
   return `<i>No description available for ${doc.name}</i>`;
 }
 
+
+// ── Extract numbered rooms from a journal's HTML pages ───────────────
+function extractRoomsFromJournal(doc) {
+  const rooms = [];
+  const pages = doc.pages?.contents ?? [];
+  for (const page of pages) {
+    if (page.type !== "text") continue;
+    const html = page.text?.content || "";
+    if (!html) continue;
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    const headings = div.querySelectorAll("h2, h3");
+    for (const heading of headings) {
+      const title = heading.textContent.trim();
+      if (!/^\d+[a-z]?\./i.test(title)) continue;
+      const paragraphs = [];
+      let sibling = heading.nextElementSibling;
+      while (sibling && !["H1","H2","H3"].includes(sibling.tagName)) {
+        if (sibling.tagName === "P" && !sibling.classList.contains("secret")) paragraphs.push(sibling.textContent.trim());
+        sibling = sibling.nextElementSibling;
+      }
+      // Build player-safe HTML: strip <section class="secret"> and <p class="secret"> blocks
+      const roomDiv = document.createElement("div");
+      let node = heading.nextElementSibling;
+      while (node && !["H1","H2","H3"].includes(node.tagName)) {
+        if (!node.classList.contains("secret")) roomDiv.appendChild(node.cloneNode(true));
+        node = node.nextElementSibling;
+      }
+      roomDiv.querySelectorAll(".secret").forEach(el => el.remove());
+      rooms.push({ pageId: page._id, pageName: page.name, roomName: title, description: paragraphs.join(" "), safeHtml: roomDiv.innerHTML });
+    }
+  }
+  return rooms;
+}
 
 function showPlacementPreview({ img = "", size = 1 } = {}) {
   hidePlacementPreview();
@@ -627,6 +662,206 @@ async function runContextAction(action, entry, onRefresh) {
 
     /* ---------- Generic ---------- */
 
+    case "brief-me": {
+      const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+
+      // Strip HTML from description and truncate
+      const rawDesc = getDocumentDescription(doc);
+      const bio = rawDesc.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+
+      // Gather subtype for richer prompts
+      const subtype = doc.system?.details?.type?.subtype
+        || doc.system?.details?.type?.value
+        || doc.type
+        || "";
+
+      ui.notifications.info(`🧠 Generating DM briefing for ${doc.name}…`);
+
+      try {
+        const res = await fetch(`${serverUrl}/brief`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: doc.name, category: entry.type, subtype, bio }),
+        });
+
+        if (!res.ok) { ui.notifications.error(`AI server error: ${res.status}`); break; }
+
+        const { text } = await res.json();
+        if (!text) break;
+
+        // Format bullets as HTML and post as GM-only whisper
+        const formatted = text
+          .split("\n")
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => `<p style="margin:2px 0">${line}</p>`)
+          .join("");
+
+        ChatMessage.create({
+          content: `<strong style="color:#c9a84c">🧠 DM Brief: ${doc.name}</strong><hr style="border-color:#5a3e1b;margin:4px 0">${formatted}`,
+          whisper: ChatMessage.getWhisperRecipients("GM"),
+        });
+
+      } catch (err) {
+        console.error("DM Panic Button | Brief Me error:", err);
+        ui.notifications.error("Could not reach AI server.");
+      }
+      break;
+    }
+
+    case "generate-art": {
+      const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+      const rawDesc   = getDocumentDescription(doc);
+      const bio       = rawDesc.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+      const subtype   = doc.system?.details?.type?.subtype
+        || doc.system?.details?.type?.value
+        || doc.type || "";
+
+      ui.notifications.info(`🎨 Generating art for ${doc.name}… (5–10 seconds)`);
+
+      try {
+        const res = await fetch(`${serverUrl}/generate-image`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: doc.name, category: entry.type, subtype, bio }),
+        });
+
+        if (!res.ok) { ui.notifications.error(`Image generation failed: ${res.status}`); break; }
+
+        const { image, prompt } = await res.json();
+        if (!image) break;
+
+        // Upload image to Foundry and save to "Images" journal folder
+        const artBlob   = await fetch(image).then(r => r.blob());
+        const artFile   = new File([artBlob], `art-${doc.name.replace(/[^a-z0-9]/gi,"-").toLowerCase()}-${Date.now()}.png`, { type:"image/png" });
+        const _forgeArt = typeof ForgeVTT !== "undefined" && ForgeVTT.usingTheForge;
+        const artUpload = await FilePicker.upload(_forgeArt ? "forgevtt" : "data", _forgeArt ? "Assets/images/panic-button" : "art-images", artFile, { notify:false });
+
+        // Find or create the "Images" journal folder
+        let imgFolder = game.folders.find(f => f.type === "JournalEntry" && f.name === "Images");
+        if (!imgFolder) imgFolder = await Folder.create({ name:"Images", type:"JournalEntry", color:"#5a3e1b" });
+
+        // Create journal entry in that folder
+        await JournalEntry.create({
+          name: doc.name,
+          folder: imgFolder.id,
+          ownership: { default: 2 },
+          pages: [{
+            name: doc.name,
+            type: "text",
+            text: { format: 1, content:
+              `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b;padding-bottom:6px">${doc.name}</h2>
+               <img src="${artUpload.path}" style="width:100%;border-radius:4px"/>
+               <p style="color:#888;font-size:0.8em;margin-top:6px;font-style:italic">${prompt}</p>`,
+            },
+          }],
+        });
+
+        new Dialog({
+          title: `🎨 ${doc.name}`,
+          content: `<div style="text-align:center">
+            <img src="${image}" style="max-width:100%;border-radius:4px;border:2px solid #5a3e1b"/>
+            <p style="color:#888;font-size:0.8em;margin-top:6px;font-style:italic">${prompt}</p>
+          </div>`,
+          buttons: {
+            show: {
+              label: "🖼 Show Players",
+              callback: () => {
+                ChatMessage.create({
+                  content: `<div style="text-align:center"><strong style="color:#c9a84c">${doc.name}</strong><br/><img src="${artUpload.path}" style="max-width:100%;border-radius:4px;margin-top:6px"/></div>`,
+                  whisper: [],
+                });
+              },
+            },
+            close: { label: "Close" },
+          },
+          default: "close",
+        }, { width: 540 }).render(true);
+
+      } catch (err) {
+        console.error("DM Panic Button | Generate Art error:", err);
+        ui.notifications.error("Could not reach AI server.");
+      }
+      break;
+    }
+
+    case "generate-map": {
+      const rooms = extractRoomsFromJournal(doc);
+      if (!rooms.length) { ui.notifications.warn("No numbered rooms found in this journal."); break; }
+
+      const roomOpts = rooms.map((r, i) => `<option value="${i}">${r.roomName}</option>`).join("");
+
+      const IS = "background:#12100e;color:#ccc0a0;border:1px solid #5a3e1b;padding:4px 6px;border-radius:3px;width:100%;box-sizing:border-box";
+      const mapDialog = new Dialog({
+        title: "📖 Illustrate Room",
+        content: `
+        <style>
+          #pmw { font-family:inherit;color:#ccc0a0;font-size:0.93em }
+          #pmw .ms { background:#1a1208;border:1px solid #5a3e1b;border-radius:5px;padding:10px 12px;margin-bottom:8px }
+          #pmw .mt { color:#c9a84c;font-size:0.76em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px;border-bottom:1px solid #3a2510;padding-bottom:3px }
+          #pmw select, #pmw input[type=text] { ${IS} }
+          #pmw select:focus, #pmw input:focus { outline:none;border-color:#c9a84c }
+        </style>
+        <div id="pmw">
+          <div class="ms">
+            <div class="mt">📍 Room</div>
+            <select id="pm-room" style="width:100%">${roomOpts}</select>
+          </div>
+          <div class="ms">
+            <div class="mt">🎨 Style Hint <span style="color:#6a5a3a;font-size:0.85em;text-transform:none;letter-spacing:0">(optional — e.g. "flooded", "on fire", "ancient evil")</span></div>
+            <input type="text" id="pm-hint" placeholder="Leave blank to use room description only"/>
+          </div>
+        </div>`,
+        buttons: {
+          generate: {
+            label: "📖 Illustrate",
+            callback: async (html) => {
+              const idx      = parseInt(html.find("#pm-room").val());
+              const hint     = html.find("#pm-hint").val().trim();
+              const { roomName, description, safeHtml } = rooms[idx];
+              const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+
+              ui.notifications.info(`🌄 Generating scene for "${roomName}"… (10–15 seconds)`);
+              try {
+                const res = await fetch(`${serverUrl}/generate-map`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ roomName, description, hint }),
+                });
+                if (!res.ok) { ui.notifications.error(`Scene generation failed: ${res.status}`); return; }
+                const { image } = await res.json();
+                if (!image) return;
+                const blob = await fetch(image).then(r => r.blob());
+                const filename = `scene-${roomName.replace(/[^a-z0-9]/gi,"-").replace(/^-+|-+$/g,"").toLowerCase()}-${Date.now()}.jpg`;
+                const file = new File([blob], filename, { type:"image/jpeg" });
+                const _forgeScene = typeof ForgeVTT !== "undefined" && ForgeVTT.usingTheForge;
+                const result = await FilePicker.upload(_forgeScene ? "forgevtt" : "data", _forgeScene ? "Assets/journals" : "battle-maps", file, { notify:false });
+
+                const pageHtml = `
+                  <h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b;padding-bottom:6px">${roomName}</h2>
+                  <img src="${result.path}" style="width:100%;border-radius:4px;margin-bottom:12px"/>
+                  <div style="color:#ccc0a0;font-size:1.1em;line-height:1.8">${safeHtml}</div>`;
+
+                await JournalEntry.create({
+                  name: roomName,
+                  ownership: { default: 2 },
+                  pages: [{ name: roomName, type: "text", text: { content: pageHtml, format: 1 } }],
+                });
+                ui.notifications.info(`✅ Journal "${roomName}" created with scene image!`);
+              } catch(err) {
+                console.error("DM Panic Button | Generate Scene error:", err);
+                ui.notifications.error("Could not generate scene.");
+              }
+            },
+          },
+          cancel: { label: "Cancel" },
+        },
+        default: "generate",
+      }, { width: 420 });
+      mapDialog.render(true);
+      break;
+    }
+
     case "open":
       doc.sheet?.render(true);
       break;
@@ -761,10 +996,23 @@ function openCreateItemDialog(onCreated) {
   }
 
   const content = `
-    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+    <style>
+      .pcf { display:flex;flex-direction:column;gap:10px;padding:6px 2px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf-wrap { background:#1a1208;border:1px solid #5a3e1b;border-radius:6px;padding:14px;margin:-4px }
+      .pcf { display:flex;flex-direction:column;gap:10px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf label { color:#c9a84c;font-size:0.78em;text-transform:uppercase;letter-spacing:.08em;font-family:'Papyrus',serif }
+      .pcf input,.pcf select {
+        background:#0d0b09;color:#ccc0a0;border:1px solid #5a3e1b;
+        padding:5px 8px;border-radius:4px;width:100%;box-sizing:border-box;font-size:0.95em }
+      .pcf input:focus,.pcf select:focus { outline:none;border-color:#c9a84c;box-shadow:0 0 6px rgba(201,168,106,0.3) }
+      .pcf input::placeholder { color:#5a4a30 }
+    </style>
+    <div class="pcf-wrap"><form class="pcf">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" name="name" placeholder="Item name" style="width:100%" autofocus />
+        <input type="text" name="name" placeholder="Item name" autofocus />
       </div>
       <div class="form-group">
         <label>Type</label>
@@ -784,7 +1032,7 @@ function openCreateItemDialog(onCreated) {
           ${rarities.map(r => `<option value="${r.value}">${r.label}</option>`).join("")}
         </select>
       </div>
-    </form>`;
+    </form></div>`;
 
   new Dialog({
     title: "Create New Item",
@@ -837,10 +1085,23 @@ function openCreateActorDialog(onCreated) {
   const crLabel = cr => ({ 0.125: "1/8", 0.25: "1/4", 0.5: "1/2" }[cr] ?? String(cr));
 
   const content = `
-    <form class="panic-create-form" style="display:flex;flex-direction:column;gap:8px;padding:4px 0;">
+    <style>
+      .pcf { display:flex;flex-direction:column;gap:10px;padding:6px 2px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf-wrap { background:#1a1208;border:1px solid #5a3e1b;border-radius:6px;padding:14px;margin:-4px }
+      .pcf { display:flex;flex-direction:column;gap:10px }
+      .pcf .form-group { display:flex;flex-direction:column;gap:3px }
+      .pcf label { color:#c9a84c;font-size:0.78em;text-transform:uppercase;letter-spacing:.08em;font-family:'Papyrus',serif }
+      .pcf input,.pcf select {
+        background:#0d0b09;color:#ccc0a0;border:1px solid #5a3e1b;
+        padding:5px 8px;border-radius:4px;width:100%;box-sizing:border-box;font-size:0.95em }
+      .pcf input:focus,.pcf select:focus { outline:none;border-color:#c9a84c;box-shadow:0 0 6px rgba(201,168,106,0.3) }
+      .pcf input::placeholder { color:#5a4a30 }
+    </style>
+    <div class="pcf-wrap"><form class="pcf">
       <div class="form-group">
         <label>Name</label>
-        <input type="text" name="name" placeholder="Actor name" style="width:100%" autofocus />
+        <input type="text" name="name" placeholder="Actor name" autofocus />
       </div>
       <div class="form-group">
         <label>Type</label>
@@ -861,7 +1122,7 @@ function openCreateActorDialog(onCreated) {
           ${crValues.map(cr => `<option value="${cr}">CR ${crLabel(cr)}</option>`).join("")}
         </select>
       </div>
-    </form>`;
+    </form></div>`;
 
   new Dialog({
     title: "Create New Actor",
@@ -917,13 +1178,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       clearTimeout(collapseTimer);
       collapseTimer = setTimeout(() => {
         if (!app._minimized) app.minimize();
-      }, 600);
+      }, 2000);
     });
 
-    // Collapse immediately on first render if mouse isn't over it
+    // Collapse on first render if mouse isn't over it
     collapseTimer = setTimeout(() => {
       if (!app._minimized) app.minimize();
-    }, 1000);
+    }, 2000);
     
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
@@ -1093,6 +1354,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
     // Always insert a horizontal line between filters and search bar
     html.find('#panic-type-search-hr').remove();
     html.find('#panic-filter-container').after('<hr id="panic-type-search-hr" style="border:0;border-top:1.5px solid #bfa046;margin:8px 0 4px 0;">');
+
+    // 🤖 Ask AI button (only when AI is enabled)
+    if (game.settings.get("dm-panic-button", "aiChatbotEnabled")) {
+      html.find('#panic-filter-container').before(
+        $(`<button id="panic-global-ai-chat" class="panic-btn" style="width:100%;margin-bottom:6px;background:#1a1a2e;color:#c9a84c;border:1px solid #5a3e1b;padding:4px;cursor:pointer;font-size:0.95em;">🤖 Ask AI</button>`)
+      );
+    }
 
     // Create bar (inserted once between HR and search)
     if (!html.find('#panic-create-bar').length) {
@@ -2044,6 +2312,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
           ${canPlace
             ? `<button class="panic-btn panic-pill" data-action="place-item">🪙 Place Item</button>`
             : ""}
+          ${game.settings.get("dm-panic-button", "aiChatbotEnabled")
+            ? `<button class="panic-btn panic-pill" data-action="brief-me" title="AI DM Briefing (GM only)">🧠 Brief Me</button>
+               <button class="panic-btn panic-pill" data-action="generate-art" title="AI Generate Art (GM only)">🎨 Art</button>
+               ${entry.type === "Journal"
+                 ? `<button class="panic-btn panic-pill" data-action="generate-map" title="AI Generate Room Journal (GM only)">📖 Illustrate</button>`
+                 : ""}`
+            : ""}
           <button class="panic-btn panic-pill" data-action="delete" style="color:#e05050;">🗑 Delete</button>
         </div>
       `;
@@ -2381,5 +2656,256 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
   // Remove the old dropdown if present
   html.find("#panic-type-filter").remove();
   input.on("input", doSearch);
+
+  // 🤖 Ask AI global chat button
+  html.find("#panic-global-ai-chat").on("click", () => {
+    const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+    openAiChatDialog(serverUrl);
+  });
+
   setTimeout(()=>input.focus(),50);
+});
+
+
+/* =================================================
+ * AI NPC CHATBOT
+ * Hooks into dnd5e attack rolls and has NPCs taunt
+ * their targets via Claude AI (local proxy server).
+ * ================================================= */
+
+console.log("🤖 DM Panic Button | AI NPC Chatbot ready");
+
+// ── Global AI Chat ────────────────────────────────
+let _aiChatHistory = []; // persists across dialog opens
+
+function openAiChatDialog(serverUrl) {
+  const IS = "background:#1a1a2e;color:#ccc0a0;border:1px solid #5a3e1b;";
+
+  function bubbleHtml(role, content) {
+    const isUser = role === "user";
+    const bg     = isUser ? "#1a2e1a" : "#1a1a2e";
+    const color  = isUser ? "#88c088" : "#ccc0a0";
+    const align  = isUser ? "right" : "left";
+    const label  = isUser ? "You" : "🤖 AI";
+    return `<div style="margin-bottom:8px;text-align:${align}">
+      <div style="display:inline-block;max-width:85%;text-align:left;background:${bg};color:${color};border:1px solid #5a3e1b;border-radius:4px;padding:6px 8px;font-size:0.9em">
+        <strong style="color:#c9a84c;display:block;margin-bottom:2px">${label}</strong>
+        ${content}
+      </div>
+    </div>`;
+  }
+
+  const chatDialog = new Dialog({
+    title: "🤖 DM AI Assistant",
+    content: `<div style="display:flex;flex-direction:column;gap:6px;width:100%">
+      <div id="ai-chat-history" style="height:300px;overflow-y:auto;${IS}border-radius:4px;padding:8px"></div>
+      <input id="ai-chat-input" type="text" placeholder="Ask anything... ('draw X', 'brief me on Y')" style="width:100%;box-sizing:border-box;${IS}padding:6px;border-radius:3px"/>
+      <div style="display:flex;gap:4px">
+        <button id="ai-chat-send" style="flex:1;background:#1a2e3e;color:#c9a84c;border:1px solid #5a3e1b;padding:6px;cursor:pointer">Send ↵</button>
+        <button id="ai-chat-clear" title="Clear history" style="background:#3a1a1a;color:#e05050;border:1px solid #5a1b1b;padding:6px 10px;cursor:pointer">🗑</button>
+      </div>
+    </div>`,
+    buttons: { close: { label: "Close" } },
+    default: "close",
+    render: (html) => {
+      // Render existing history
+      const histDiv = html.find("#ai-chat-history");
+      _aiChatHistory.forEach(m => histDiv.append(bubbleHtml(m.role, m.content)));
+      histDiv[0].scrollTop = histDiv[0].scrollHeight;
+
+      async function sendMessage() {
+        const input = html.find("#ai-chat-input");
+        const msg = input.val().trim();
+        if (!msg) return;
+        input.val("").prop("disabled", true);
+        html.find("#ai-chat-send").prop("disabled", true);
+
+        _aiChatHistory.push({ role: "user", content: msg });
+        histDiv.append(bubbleHtml("user", msg));
+
+        const thinking = $(`<div id="ai-thinking" style="color:#666;font-style:italic;font-size:0.85em;margin-bottom:6px">⏳ Thinking…</div>`);
+        histDiv.append(thinking);
+        histDiv[0].scrollTop = histDiv[0].scrollHeight;
+
+        try {
+          const res = await fetch(`${serverUrl}/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: _aiChatHistory, userMessage: msg }),
+          });
+
+          thinking.remove();
+
+          if (!res.ok) {
+            histDiv.append(bubbleHtml("assistant", `<span style="color:#e05050">Error ${res.status} from AI server.</span>`));
+          } else {
+            const { type, text, image, prompt } = await res.json();
+            if (type === "image") {
+              const imgHtml = `<img src="${image}" style="max-width:100%;border-radius:4px;margin-top:4px"/><br/><em style="color:#888;font-size:0.8em">${prompt}</em>`;
+              histDiv.append(bubbleHtml("assistant", imgHtml));
+              _aiChatHistory.push({ role: "assistant", content: `[Generated image: ${prompt}]` });
+            } else {
+              const formatted = (text || "").split("\n").filter(Boolean).map(l => `<p style="margin:2px 0">${l}</p>`).join("");
+              histDiv.append(bubbleHtml("assistant", formatted));
+              _aiChatHistory.push({ role: "assistant", content: text });
+            }
+          }
+        } catch (err) {
+          thinking.remove();
+          histDiv.append(bubbleHtml("assistant", `<span style="color:#e05050">Could not reach AI server.</span>`));
+          console.error("DM Panic Button | AI Chat error:", err);
+        }
+
+        histDiv[0].scrollTop = histDiv[0].scrollHeight;
+        input.prop("disabled", false).focus();
+        html.find("#ai-chat-send").prop("disabled", false);
+      }
+
+      html.find("#ai-chat-send").on("click", sendMessage);
+      html.find("#ai-chat-input").on("keydown", (ev) => { if (ev.key === "Enter") sendMessage(); });
+      html.find("#ai-chat-clear").on("click", () => {
+        _aiChatHistory = [];
+        histDiv.empty();
+      });
+    },
+  }, { width: 520, height: "auto" });
+
+  chatDialog.render(true);
+}
+
+// ── Settings ─────────────────────────────────────
+Hooks.once("ready", () => {
+  game.settings.register("dm-panic-button", "aiChatbotEnabled", {
+    name: "NPC AI Chatbot",
+    hint: "NPCs automatically say something after attacking. Requires the local AI server to be running.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false,
+  });
+
+  game.settings.register("dm-panic-button", "aiServerUrl", {
+    name: "AI Server URL",
+    hint: "URL of the local AI proxy server. Default: http://localhost:3001",
+    scope: "world",
+    config: true,
+    type: String,
+    default: "http://localhost:3001",
+  });
+
+  game.settings.register("dm-panic-button", "aiChatbotTone", {
+    name: "NPC Chatbot Tone",
+    hint: "Personality tone for NPC taunts.",
+    scope: "world",
+    config: true,
+    type: String,
+    default: "menacing",
+    choices: {
+      menacing: "Menacing",
+      taunting: "Taunting",
+      dramatic: "Dramatic",
+      comedic:  "Comedic",
+    },
+  });
+
+  game.settings.register("dm-panic-button", "aiChatbotWhisper", {
+    name: "Whisper Taunts to GM Only",
+    hint: "If enabled, AI taunts are only visible to the GM. Disable to post publicly.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false,
+  });
+});
+
+// ── Shared taunt function ─────────────────────────
+async function _aiNpcTaunt(actor, attackName, hit, targetName) {
+  const serverUrl    = game.settings.get("dm-panic-button", "aiServerUrl");
+  const tone         = game.settings.get("dm-panic-button", "aiChatbotTone");
+  const whisper      = game.settings.get("dm-panic-button", "aiChatbotWhisper");
+  const attackerName = actor.token?.name || actor.name;
+  const attackerType = actor.system?.details?.type?.subtype
+    || actor.system?.details?.type?.value
+    || "creature";
+
+  // Rich actor context for more dramatic taunts
+  const hp       = actor.system?.attributes?.hp;
+  const hpPct    = hp?.max > 0 ? Math.round((hp.value / hp.max) * 100) : 100;
+  const cr       = actor.system?.details?.cr ?? null;
+  const alignment = actor.system?.details?.alignment || "";
+  const intScore = actor.system?.abilities?.int?.value ?? 10;
+  const chaScore = actor.system?.abilities?.cha?.value ?? 10;
+  const immunities  = actor.system?.traits?.di?.value  || [];
+  const resistances = actor.system?.traits?.dr?.value  || [];
+  const conditionImmunities = actor.system?.traits?.ci?.value || [];
+  const languages   = actor.system?.traits?.languages?.value || [];
+  const size        = actor.system?.traits?.size || "med";
+  const specialAbilities = (actor.items || [])
+    .filter(i => i.type === "feat")
+    .map(i => i.name);
+
+  console.log(`🤖 AI Chatbot | calling server — ${attackerName} ${hit ? "hit" : "missed"} ${targetName} (HP: ${hpPct}%, CR: ${cr})`);
+
+  try {
+    const res = await fetch(`${serverUrl}/npc-taunt`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        attackerName, attackerType, attackName, targetName, hit, tone,
+        hpPct, cr, alignment, intScore, chaScore,
+        immunities, resistances, conditionImmunities, languages, size, specialAbilities,
+      }),
+    });
+
+    if (!res.ok) { console.warn(`DM Panic Button | AI server responded ${res.status}`); return; }
+
+    const { text } = await res.json();
+    if (!text) return;
+
+    await ChatMessage.create({
+      content: `<span style="font-style:italic;color:#c9a84c">${attackerName}:</span> "${text}"`,
+      speaker: ChatMessage.getSpeaker({ actor }),
+      whisper: whisper ? ChatMessage.getWhisperRecipients("GM") : [],
+    });
+  } catch (err) {
+    console.error("DM Panic Button | AI chatbot error:", err);
+  }
+}
+
+// ── midi-qol hook (fires after full attack workflow) ──
+Hooks.on("midi-qol.AttackRollComplete", async (workflow) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+
+  const actor = workflow.actor;
+  if (!actor || actor.type !== "npc") return;
+
+  const attackName = workflow.item?.name || "attack";
+  const target     = workflow.targets?.first();
+  const targetName = target?.name || "you";
+  const hit        = workflow.attackTotal >= (target?.actor?.system?.attributes?.ac?.value ?? 10);
+
+  console.log(`🤖 AI Chatbot | midi-qol hook fired for ${actor.name}`);
+  await _aiNpcTaunt(actor, attackName, hit, targetName);
+});
+
+// ── Vanilla dnd5e fallback (skipped when midi-qol active) ──
+Hooks.on("createChatMessage", async (message) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+  if (game.modules.get("midi-qol")?.active) return;
+
+  const rollType = message.flags?.dnd5e?.roll?.type;
+  if (rollType !== "attack") return;
+
+  const actor = game.actors?.get(message.speaker?.actor);
+  if (!actor || actor.type !== "npc") return;
+
+  const roll       = message.rolls?.[0];
+  const targets    = Array.from(game.user.targets ?? []);
+  const targetName = targets[0]?.name || "you";
+  const targetAC   = targets[0]?.actor?.system?.attributes?.ac?.value ?? 10;
+  const hit        = (roll?.total ?? 0) >= targetAC;
+
+  await _aiNpcTaunt(actor, message.flavor || "attack", hit, targetName);
 });

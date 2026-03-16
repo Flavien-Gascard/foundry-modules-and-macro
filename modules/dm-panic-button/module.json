@@ -16,6 +16,6 @@
     "minimum": "13",
     "verified": "13"
   },
-  "esmodules": ["panic.js", "ai-npc-chat.js"],
+  "esmodules": ["panic.js"],
   "styles": ["styles.css"]
 }
