@@ -1,0 +1,53 @@
+<form data-condition-id="{{condition.id}}">
+    <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.OptionConfig.Description"}}</p>
+    <div class="options">
+        <div class="form-group">
+            <input type="checkbox" name="overlay" {{checked condition.options.overlay}} {{#if ../isDefault}}disabled{{/if}}>
+            <label for="overlay">
+                {{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.Overlay.Label"}}
+                {{!-- <span class="tooltip"><i class="fas fa-question-circle"></i></span> --}}
+            </label>
+            <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.Overlay.Title"}}</p>
+        </div>
+        <div class="form-group">
+            <input type="checkbox" name="remove-others" {{checked condition.options.removeOthers}} {{#if ../isDefault}}disabled{{/if}}>
+            <label for="remove-others">
+                {{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.RemoveOthers.Label"}}
+                {{!-- <span class="tooltip"><i class="fas fa-question-circle"></i></span> --}}
+            </label>
+            <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.RemoveOthers.Title"}}</p>
+        </div>
+        <div class="form-group">
+            <input type="checkbox" name="output-chat" {{checked condition.options.outputChat}} {{#if ../disableChatOutput}}disabled{{/if}}>
+            <label for="output-chat">
+                {{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.OutputChat.Label"}}
+                {{!-- <span class="tooltip"><i class="fas fa-question-circle"></i></span>     --}}
+            </label>
+            <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.OutputChat.Title"}}</p>
+        </div>
+        <div class="form-group">
+            <input type="checkbox" name="mark-defeated" {{checked condition.options.markDefeated}} {{#if ../isDefault}}disabled{{/if}}>
+            <label for="mark-defeated">
+                {{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.MarkDefeated.Label"}}
+                {{!-- <span class="tooltip"><i class="fas fa-question-circle"></i></span> --}}
+            </label>
+            <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.Lab.Options.MarkDefeated.Title"}}</p>
+        </div>
+    </div>
+    <div>
+        <h3>{{localize "CLT.ENHANCED_CONDITIONS.OptionConfig.SpecialStatusEffects.Heading"}}</h3>
+        <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.OptionConfig.SpecialStatusEffects.Description"}}</p>
+        {{#each specialStatus}}
+        <div class="form-group">
+            <input type="checkbox" name="{{this}}" {{checked (lookup ../condition.options this)}} {{disabled ../isDefault}}>
+            <label style="text-transform: capitalize;">{{this}}</label>
+        </div>
+        {{/each}}
+    </div>
+    <div class="footer">
+        <button name="save" class="save" type="submit">
+            <i class="fas fa-save"></i>&nbsp;{{localize "Save"}}
+        </button>
+        <p class="notes">{{localize "CLT.ENHANCED_CONDITIONS.OptionConfig.SaveNote"}}</p>
+    </div>
+</form>

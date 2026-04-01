@@ -1,0 +1,61 @@
+name: Release Condition Lab & Triggler
+
+on:
+  push:
+    tags:
+      - "condition-lab-triggler-v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#condition-lab-triggler-v}" >> $GITHUB_OUTPUT
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: cd modules/condition-lab-triggler && npm install
+
+      - name: Build
+        run: cd modules/condition-lab-triggler && npm run build
+
+      - name: Update version and download URL in module.json
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" modules/condition-lab-triggler/dist/module.json
+          sed -i "s|\"download\": \".*\"|\"download\": \"https://github.com/Flavien-Gascard/foundry-modules-and-macro/releases/download/condition-lab-triggler-v$VERSION/condition-lab-triggler.zip\"|" modules/condition-lab-triggler/dist/module.json
+
+      - name: Create zip
+        run: |
+          cd modules/condition-lab-triggler/dist
+          zip -r ../../../condition-lab-triggler.zip . \
+            --exclude "*.git*" \
+            --exclude "*.DS_Store"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Condition Lab & Triggler v${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## Condition Lab & Triggler v${{ steps.version.outputs.VERSION }}
+
+            ### Install in Foundry VTT
+            Manifest URL:
+            ```
+            https://raw.githubusercontent.com/Flavien-Gascard/foundry-modules-and-macro/main/modules/condition-lab-triggler/dist/module.json
+            ```
+          files: |
+            condition-lab-triggler.zip
+            modules/condition-lab-triggler/dist/module.json
