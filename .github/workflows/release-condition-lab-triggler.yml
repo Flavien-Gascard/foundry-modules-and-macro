@@ -50,7 +50,7 @@ jobs:
           git fetch origin main
           git checkout main
           git add modules/condition-lab-triggler/dist/module.json
-          git commit -m "chore: update condition-lab-triggler dist/module.json for v${{ steps.version.outputs.VERSION }}"
+          git diff --cached --quiet || git commit -m "chore: update condition-lab-triggler dist/module.json for v${{ steps.version.outputs.VERSION }}"
           git push origin main
 
       - name: Create GitHub Release
