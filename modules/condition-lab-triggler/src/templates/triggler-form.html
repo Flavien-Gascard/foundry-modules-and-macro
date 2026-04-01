@@ -1,0 +1,172 @@
+<form class="flexcol" autocomplete="off">
+	<div class="triggler-body">
+		<div class="form-group triggler">
+			<label>{{localize "CLT.TRIGGLER.App.Labels.Triggers"}}</label>
+			<select name="triggers">
+				{{selectOptions triggers selected=id valueAttr="id" labelAttr="text" blank="" }}
+			</select>
+			{{#if triggerSelected}}
+			<a class="delete"><i class="fas fa-trash"></i></a>
+			{{/if}}
+		</div>
+		<div class="form-group">
+			<label>{{localize "CLT.TRIGGLER.App.Labels.Type"}}</label>
+			<div class="flexrow">
+				<div class="type-select">
+					<input
+						id="triggler-trigger-type-simple"
+						type="radio"
+						name="triggerType"
+						value="simple"
+						{{checked
+						isSimpleTrigger}}
+					/>
+					<label for="triggler-trigger-type-simple"
+						><strong>{{localize "CLT.TRIGGLER.App.TriggerType.Simple.Label"}}</strong></label
+					>
+				</div>
+				<div class="type-select">
+					<input
+						id="triggler-trigger-type-advanced"
+						type="radio"
+						name="triggerType"
+						value="advanced"
+						{{checked
+						isAdvancedTrigger}}
+					/>
+					<label for="triggler-trigger-type-advanced"
+						><strong>{{localize "CLT.TRIGGLER.App.TriggerType.Advanced.Label"}}</strong></label
+					>
+				</div>
+			</div>
+		</div>
+		<hr />
+		{{#if isSimpleTrigger}}
+		<fieldset class="simple-trigger">
+			<div class="flexrow">
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Category"}}</span>
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Attribute"}}</span>
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Property" number=1}}</span>
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Operator"}}</span>
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Value"}}</span>
+				<span>{{localize "CLT.TRIGGLER.App.Labels.Property" number=2}}</span>
+			</div>
+			<div class="flexrow">
+				<select name="category" {{disabled (not isSimpleTrigger)}}>
+					{{selectOptions categories selected=category blank="" }}
+				</select>
+				<select name="attribute" {{disabled (not isSimpleTrigger)}}>
+					{{selectOptions attributes selected=attribute blank="" }}
+				</select>
+				<select name="property1" {{disabled (not isSimpleTrigger)}}>
+					{{selectOptions properties selected=property1 blank="" }}
+				</select>
+				<select name="operator" {{disabled (not isSimpleTrigger)}}>
+					{{selectOptions operators selected=operator blank="" }}
+				</select>
+				<input type="text" name="value" class="value" value="{{value}}" {{disabled (not isSimpleTrigger)}} />
+				<select name="property2" {{disabled (not isSimpleTrigger)}}>
+					{{selectOptions properties selected=property2 blank="" }}
+				</select>
+			</div>
+		</fieldset>
+		{{/if}}
+		{{#if isAdvancedTrigger}}
+		<div class="advanced-trigger">
+			<fieldset>
+				<div class="form-group">
+					<label for="triggler-advanced-name">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.Name.Label"}}</label>
+					<input
+						id="triggler-advanced-name"
+						name="advancedName"
+						type="text"
+						value="{{advancedName}}"
+						{{disabled
+						(not
+						isAdvancedTrigger)}}
+					/>
+				</div>
+			</fieldset>
+			<fieldset>
+				<legend>{{localize "DOCUMENT.Actor"}}</legend>
+				<div class="form-group">
+					<label for="triggler-advanced-actor-property"
+						>{{localize "CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty.Label"}}</label
+					>
+					<input id="triggler-advanced-actor-property" name="advancedActorProperty" type="text"
+					value="{{advancedActorProperty}}" placeholder="{{localize
+					"CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty.Placeholder"}}" {{disabled (not isAdvancedTrigger)}}>
+					<p class="notes">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty.Note"}}</p>
+				</div>
+				<div class="form-group">
+					<label for="triggler-advanced-actor-property2"
+						>{{localize "CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty2.Label"}}</label
+					>
+					<input id="triggler-advanced-actor-property2" name="advancedActorProperty2" type="text"
+					value="{{advancedActorProperty2}}" placeholder="{{localize
+					"CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty2.Placeholder"}}" {{disabled (not isAdvancedTrigger)}}>
+					<p class="notes">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.ActorProperty2.Note"}}</p>
+				</div>
+			</fieldset>
+			<fieldset>
+				<legend>{{localize "DOCUMENT.Token"}}</legend>
+				<div class="form-group">
+					<label for="triggler-advanced-token-property"
+						>{{localize "CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty.Label"}}</label
+					>
+					<input id="triggler-advanced-token-property" name="advancedTokenProperty" type="text"
+					value="{{advancedTokenProperty}}" placeholder="{{localize
+					"CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty.Placeholder"}}" {{disabled (not isAdvancedTrigger)}}>
+					<p class="notes">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty.Note"}}</p>
+				</div>
+				<div class="form-group">
+					<label for="triggler-advanced-token-property2"
+						>{{localize "CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty2.Label"}}</label
+					>
+					<input id="triggler-advanced-token-property2" name="advancedTokenProperty2" type="text"
+					value="{{advancedTokenProperty2}}" placeholder="{{localize
+					"CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty2.Placeholder"}}" {{disabled (not isAdvancedTrigger)}}>
+					<p class="notes">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.TokenProperty2.Note"}}</p>
+				</div>
+			</fieldset>
+			<fieldset>
+				<legend>{{localize "CLT.TRIGGLER.App.AdvancedTrigger.OperatorValue.Heading"}}</legend>
+				<p class="notes">{{localize "CLT.TRIGGLER.App.AdvancedTrigger.OperatorValue.Note"}}</p>
+				<div class="flexrow">
+					<select name="advancedOperator" class="advanced-trigger-operator" {{disabled (not isAdvancedTrigger)}}>
+						{{selectOptions operators selected=advancedOperator blank="" }}
+					</select>
+					<input
+						type="text"
+						name="advancedValue"
+						class="advanced-trigger-value"
+						value="{{advancedValue}}"
+						{{disabled (not isAdvancedTrigger)}}
+					/>
+				</div>
+			</fieldset>
+		</div>
+		{{/if}}
+		<fieldset>
+			<legend>{{localize "CLT.TRIGGLER.App.Options.Title"}}</legend>
+			<div class="flexrow triggler">
+				<div class="form-group options" data-tooltip="Trigger for player-owned Actors only">
+					<input type="checkbox" name="pcOnly" {{checked pcOnly}} {{disabled npcOnly}} />
+					<label>PCs Only</label>
+				</div>
+				<div class="form-group options" data-tooltip="Trigger for non-player-owned Actors only">
+					<input type="checkbox" name="npcOnly" {{checked npcOnly}} {{disabled pcOnly}} />
+					<label>NPCs Only</label>
+				</div>
+				<div class="form-group options" data-tooltip="Trigger only if Property 1 value is not 0">
+					<input type="checkbox" name="notZero" {{checked notZero}} />
+					<label>Property not 0</label>
+				</div>
+			</div>
+		</fieldset>
+	</div>
+
+	<footer class="flexrow">
+		<button type="submit" name="save"><i class="fas fa-save"></i> {{localize "Save"}}</button>
+	</footer>
+</form>

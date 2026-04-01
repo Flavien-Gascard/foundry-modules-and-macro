@@ -1,0 +1,82 @@
+<li class="row flexrow {{#if condition.hidden}}hidden{{/if}}" data-mapping-row="{{@index}}" data-condition-id="{{condition.id}}" >
+            <div class="flexcol content1">
+                <div class="flexrow">
+                    <div class="flexcol icon">
+                        <img
+                            name="icon-{{@index}}"
+                            src="{{condition.img}}"
+                            {{#unless isDefault}}data-edit="img"{{/unless}}
+                            class="icon" />
+                        <input type="text" name="icon-path-{{@index}}" class="icon-path condition-text-input" value="{{condition.img}}" data-dtype="String" {{disabled isDefault}} hidden>
+                    </div>
+                    <div class="flexcol text-entry">
+                        <div class="flexrow">
+                            <div class="condition">
+                                <div class="wrapper-rel">
+                                    <input type="text" name="condition-{{@index}}" value="{{condition.name}}" class="condition condition-text-input" data-dtype="String" placeholder="{{localize "Name"}}" {{disabled isDefault}}>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flexrow condition-lab text-entry reference">
+                            <div class="wrapper-rel">
+                                <input type="text" name="reference-item-{{@index}}" value="{{condition.reference}}" hidden>
+                                {{#if condition.enrichedReference}}
+                                <div class="enriched-link">{{{condition.enrichedReference}}}</div>
+                                {{else}}
+                                <div>{{localize "CLT.ENHANCED_CONDITIONS.ConditionLab.NoReference"}}</div>
+                                {{/if}}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="flexcol content2">
+                <div class="flexrow related-buttons">
+                    <button type="button"
+                        name="option-config"
+                        class="option-config">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <button type="button"
+                            class="active-effect-config"
+                            data-tooltip="{{#if condition.isNew}}
+                                {{localize "CLT.ENHANCED_CONDITIONS.Lab.ActiveEffects.TitleDisabledNew"}}
+                                {{else if isDefault}}{{localize "CLT.ENHANCED_CONDITIONS.Lab.ActiveEffects.TitleDisabledDefault"}}
+                                {{/if}}"
+                                    {{disabled (or condition.isNew isDefault)}}
+                                data-tooltip-direction="UP">
+                        <i class="fas fa-hand-sparkles"></i>
+                    </button>
+                    <div class="flex-break"></div>
+                    <button type="button"
+                        class="trigger-config">
+                        {{> "modules/condition-lab-triggler/templates/partials/triggler-icon.hbs"}}
+                    </button>
+                    <button type="button"
+                        name="macro-config"
+                        class="macro-config">
+                        <i class="fas fa-code"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flexcol row-controls">
+                <div class="move-up">
+                    {{#unless (or sortDirection (eq key 0))}}
+                    <a class="move-up"><i class="fas fa-chevron-up"></i></a>
+                    {{/unless}}
+                </div>
+                <div class="remove-row">
+                    {{#unless isDefault}}
+                    <a name="remove-row-{{@index}}" class="remove-row">
+                        <i class="fas fa-trash"></i>
+                    </a>
+                    {{/unless}}
+                </div>
+                <div class="move-down">
+                    {{#unless (or sortDirection (eq key conditionMapLength))}}
+                    <a class="move-down"><i class="fas fa-chevron-down"></i></a>
+                    {{/unless}}
+                </div>
+            </div>
+
+        </li>
