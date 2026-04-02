@@ -19,5 +19,6 @@
     "verified": "13"
   },
   "esmodules": ["panic.js"],
-  "styles": ["styles.css"]
+  "styles": ["styles.css"],
+  "socket": true
 }

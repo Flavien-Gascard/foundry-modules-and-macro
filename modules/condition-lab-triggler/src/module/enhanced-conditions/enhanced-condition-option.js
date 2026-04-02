@@ -46,10 +46,7 @@ export default class EnhancedConditionOptionConfig extends FormApplication {
 		if (!event.target?.checked) return;
 		const targetName = event.target?.name;
 		const propertyName = Sidekick.toCamelCase(targetName, "-");
-		const specialStatusEffectsProps = Object.values({
-			blinded: { optionProperty: "blindToken" },
-			invisible: { optionProperty: "markInvisible" }
-		}).map((k) => k.optionProperty);
+		const specialStatusEffectsProps = Object.values(CONFIG.specialStatusEffects);
 
 		if (!propertyName || !specialStatusEffectsProps) return;
 
@@ -142,19 +139,12 @@ export default class EnhancedConditionOptionConfig extends FormApplication {
 	/**
 	 * Get the enum for a special status effect based on the field name
 	 * @param {string} field
-	 * @returns {string | undefined} BLIND, INVISIBLE, or DEFEATED
+	 * @returns {string | undefined} The CONFIG.specialStatusEffects key whose value matches this field
 	 */
 	getSpecialStatusEffectByField(field) {
-		switch (field) {
-			case "blind-token":
-				return "BLIND";
-
-			case "mark-invisible":
-				return "INVISIBLE";
-
-			default:
-				break;
-		}
+		return Object.keys(CONFIG.specialStatusEffects).find(
+			(key) => CONFIG.specialStatusEffects[key] === field
+		);
 	}
 
 	/**

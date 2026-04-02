@@ -227,16 +227,6 @@ Hooks.once("ready", async () => {
   
   // Build spell-class mapping from CONFIG.DND5E.SPELL_LISTS
   await buildSpellClassMap();
-  
-  // Register configurable item pile icon setting
-  game.settings.register("dm-panic-button", "itemPileIcon", {
-    name: "Item Pile Icon URL",
-    hint: "URL or relative path for the icon used for item piles placed by the Panic Button. Example: modules/dm-panic-button/data/images/chest.png",
-    scope: "world",
-    config: true,
-    type: String,
-    default: "modules/dm-panic-button/data/images/chest.png"
-  });
 });
 
 
@@ -1178,13 +1168,13 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
       clearTimeout(collapseTimer);
       collapseTimer = setTimeout(() => {
         if (!app._minimized) app.minimize();
-      }, 2000);
+      }, 1000);
     });
 
     // Collapse on first render if mouse isn't over it
     collapseTimer = setTimeout(() => {
       if (!app._minimized) app.minimize();
-    }, 2000);
+    }, 1000);
     
     // Inject CSS to ensure .panic-category-btn and .panic-subtype-btn look identical
     if (!document.getElementById('panic-pill-style')) {
@@ -2675,6 +2665,9 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
 
 console.log("🤖 DM Panic Button | AI NPC Chatbot ready");
 
+const _aiTurnAttackEvents = new Map();
+let _aiActiveTurn = null;
+
 // ── Global AI Chat ────────────────────────────────
 let _aiChatHistory = []; // persists across dialog opens
 
@@ -2714,6 +2707,33 @@ function openAiChatDialog(serverUrl) {
       histDiv[0].scrollTop = histDiv[0].scrollHeight;
 
       async function sendMessage() {
+        // Auto-condense: when history hits 20 messages, summarize the oldest 16 and keep the last 4
+        async function maybeCondenseHistory() {
+          const THRESHOLD = 20;
+          const KEEP_TAIL = 4;
+          if (_aiChatHistory.length < THRESHOLD) return;
+          const toCondense = _aiChatHistory.slice(0, -KEEP_TAIL);
+          const tail = _aiChatHistory.slice(-KEEP_TAIL);
+          try {
+            const cr = await fetch(`${serverUrl}/condense`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ messages: toCondense }),
+            });
+            if (cr.ok) {
+              const { summary } = await cr.json();
+              _aiChatHistory = [
+                { role: "user",      content: `[Earlier conversation summary]\n${summary}` },
+                { role: "assistant", content: "Understood, continuing from there." },
+                ...tail,
+              ];
+              histDiv.prepend(`<div style="color:#888;font-style:italic;font-size:0.8em;text-align:center;margin-bottom:6px">— conversation condensed —</div>`);
+            }
+          } catch (e) {
+            console.warn("DM Panic Button | History condense failed:", e);
+          }
+        }
+
         const input = html.find("#ai-chat-input");
         const msg = input.val().trim();
         if (!msg) return;
@@ -2728,10 +2748,12 @@ function openAiChatDialog(serverUrl) {
         histDiv[0].scrollTop = histDiv[0].scrollHeight;
 
         try {
+          await maybeCondenseHistory();
+          const historyWithoutCurrent = _aiChatHistory.slice(0, -1);
           const res = await fetch(`${serverUrl}/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ messages: _aiChatHistory, userMessage: msg }),
+            body: JSON.stringify({ messages: historyWithoutCurrent, userMessage: msg }),
           });
 
           thinking.remove();
@@ -2776,8 +2798,8 @@ function openAiChatDialog(serverUrl) {
 // ── Settings ─────────────────────────────────────
 Hooks.once("ready", () => {
   game.settings.register("dm-panic-button", "aiChatbotEnabled", {
-    name: "NPC AI Chatbot",
-    hint: "NPCs automatically say something after attacking. Requires the local AI server to be running.",
+    name: "Enable AI Features",
+    hint: "Enables AI taunts, Ask AI, DM briefings, art, and illustration actions. Requires the local AI server to be running.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -2819,78 +2841,266 @@ Hooks.once("ready", () => {
 });
 
 // ── Shared taunt function ─────────────────────────
-async function _aiNpcTaunt(actor, attackName, hit, targetName) {
+function normalizeAiList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  if (value instanceof Set) return [...value].filter(Boolean).map(String);
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map(v => v.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "object") {
+    return Object.values(value).filter(Boolean).map(String);
+  }
+  return [];
+}
+
+function normalizeAiText(value) {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+async function _aiNpcTaunt(actor, attackName, hit, targetToken, {
+  isCritical = false,
+  attackTotal = null,
+  roundSummary = null,
+  triggerOverride = null,
+} = {}) {
   const serverUrl    = game.settings.get("dm-panic-button", "aiServerUrl");
   const tone         = game.settings.get("dm-panic-button", "aiChatbotTone");
-  const whisper      = game.settings.get("dm-panic-button", "aiChatbotWhisper");
+  const tauntWhisper = game.settings.get("dm-panic-button", "aiChatbotWhisper");
   const attackerName = actor.token?.name || actor.name;
+
   const attackerType = actor.system?.details?.type?.subtype
     || actor.system?.details?.type?.value
     || "creature";
 
-  // Rich actor context for more dramatic taunts
+  // ── Attacker stat block ──
   const hp       = actor.system?.attributes?.hp;
   const hpPct    = hp?.max > 0 ? Math.round((hp.value / hp.max) * 100) : 100;
   const cr       = actor.system?.details?.cr ?? null;
-  const alignment = actor.system?.details?.alignment || "";
+  const alignment = normalizeAiText(actor.system?.details?.alignment);
   const intScore = actor.system?.abilities?.int?.value ?? 10;
   const chaScore = actor.system?.abilities?.cha?.value ?? 10;
-  const immunities  = actor.system?.traits?.di?.value  || [];
-  const resistances = actor.system?.traits?.dr?.value  || [];
-  const conditionImmunities = actor.system?.traits?.ci?.value || [];
-  const languages   = actor.system?.traits?.languages?.value || [];
-  const size        = actor.system?.traits?.size || "med";
-  const specialAbilities = (actor.items || [])
-    .filter(i => i.type === "feat")
-    .map(i => i.name);
+  const immunities          = normalizeAiList(actor.system?.traits?.di?.value);
+  const resistances         = normalizeAiList(actor.system?.traits?.dr?.value);
+  const conditionImmunities = normalizeAiList(actor.system?.traits?.ci?.value);
+  const languages = [
+    ...normalizeAiList(actor.system?.traits?.languages?.value),
+    ...normalizeAiList(actor.system?.traits?.languages?.custom)
+  ];
+  const size                = actor.system?.traits?.size || "med";
+  const specialAbilities    = normalizeAiList((actor.items || []).filter(i => i.type === "feat").map(i => i.name));
 
-  console.log(`🤖 AI Chatbot | calling server — ${attackerName} ${hit ? "hit" : "missed"} ${targetName} (HP: ${hpPct}%, CR: ${cr})`);
+  // ── NPC resources (legendary actions, lair) ──
+  const actorRes = actor.system?.resources ?? {};
+  const resources = {
+    legendaryActions:     actorRes.legact?.max > 0 ? { remaining: actorRes.legact.value, max: actorRes.legact.max } : null,
+    legendaryResistances: actorRes.legres?.max > 0 ? { remaining: actorRes.legres.value, max: actorRes.legres.max } : null,
+    hasLairActions:       !!actorRes.lair?.value,
+    lairInitiative:       actorRes.lair?.value ? (actorRes.lair.initiative ?? null) : null,
+  };
+
+  // ── Target detail ──
+  const targetActor = targetToken?.actor;
+  const targetHp    = targetActor?.system?.attributes?.hp;
+  const target = {
+    name:          targetToken?.name || "unknown",
+    hpPct:         targetHp?.max > 0 ? Math.round((targetHp.value / targetHp.max) * 100) : 100,
+    ac:            targetActor?.system?.attributes?.ac?.value ?? 10,
+    conditions:    normalizeAiList(targetActor?.statuses),
+    concentration: targetActor?.statuses?.has("concentration") ?? false,
+  };
+
+  // ── Party state (player characters on scene with valid HP) ──
+  const party = (canvas.tokens?.placeables ?? [])
+    .filter(t => t.actor && (t.actor?.system?.attributes?.hp?.max ?? 0) > 0)
+    .map(t => {
+      const a = t.actor;
+      const h = a.system.attributes.hp;
+      return {
+        name:          t.name,
+        hpPct:         h.max > 0 ? Math.round((h.value / h.max) * 100) : 100,
+        ac:            a.system.attributes.ac?.value ?? 10,
+        conditions:    normalizeAiList(a.statuses),
+        concentration: a.statuses?.has("concentration") ?? false,
+      };
+    });
+
+  // ── Combat state ──
+  const combat = game.combat ? {
+    round:              game.combat.round,
+    activeCombatants:   game.combat.combatants.filter(c => !c.defeated).map(c => c.name),
+    defeatedCombatants: game.combat.combatants.filter(c =>  c.defeated).map(c => c.name),
+  } : null;
+
+  const trigger = triggerOverride || (isCritical ? "critical_hit" : hit ? "attack_hit" : "attack_miss");
+  console.log(`🤖 AI Chatbot | ${attackerName} [${trigger}] → ${target.name} (NPC HP: ${hpPct}%, round: ${combat?.round ?? "?"})`);
 
   try {
-    const res = await fetch(`${serverUrl}/npc-taunt`, {
+    const fetchRes = await fetch(`${serverUrl}/npc-taunt`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        attackerName, attackerType, attackName, targetName, hit, tone,
+        attackerName, attackerType, attackName, hit, tone,
         hpPct, cr, alignment, intScore, chaScore,
         immunities, resistances, conditionImmunities, languages, size, specialAbilities,
+        isCritical, attackTotal, trigger,
+        target, party, combat, resources, roundSummary,
       }),
     });
 
-    if (!res.ok) { console.warn(`DM Panic Button | AI server responded ${res.status}`); return; }
+    if (!fetchRes.ok) { console.warn(`DM Panic Button | AI server responded ${fetchRes.status}`); return; }
 
-    const { text } = await res.json();
-    if (!text) return;
+    const payload = await fetchRes.json();
+    const taunt = (payload.taunt || payload.text || "").trim();
+    const dmWhisper = (payload.whisper || "").trim();
 
-    await ChatMessage.create({
-      content: `<span style="font-style:italic;color:#c9a84c">${attackerName}:</span> "${text}"`,
-      speaker: ChatMessage.getSpeaker({ actor }),
-      whisper: whisper ? ChatMessage.getWhisperRecipients("GM") : [],
-    });
+    if (taunt) {
+      await ChatMessage.create({
+        content: `<span style="font-style:italic;color:#c9a84c">${attackerName}:</span> "${taunt}"`,
+        speaker: ChatMessage.getSpeaker({ actor }),
+        whisper: tauntWhisper ? ChatMessage.getWhisperRecipients("GM") : [],
+        flags: { "dm-panic-button": { npcTaunt: true, attackerName, taunt, roundSummary } },
+      });
+    }
+
+    // DM whisper — always GM-only, styled as advisor note
+    if (dmWhisper) {
+      await ChatMessage.create({
+        content: `<div style="font-size:0.85em;color:#8ab4f8;border-left:3px solid #4a6fa5;padding:4px 8px;margin:2px 0"><strong>🎲 DM:</strong> ${dmWhisper}</div>`,
+        whisper: ChatMessage.getWhisperRecipients("GM"),
+      });
+    }
   } catch (err) {
     console.error("DM Panic Button | AI chatbot error:", err);
   }
 }
 
-// ── midi-qol hook (fires after full attack workflow) ──
-Hooks.on("midi-qol.AttackRollComplete", async (workflow) => {
+function _getCombatantForActor(actor, sourceToken = null) {
+  const combat = game.combat;
+  if (!combat || !actor) return null;
+
+  const tokenId = sourceToken?.document?.id || sourceToken?.id || null;
+  if (tokenId) {
+    const byToken = combat.combatants.find(c => c.tokenId === tokenId);
+    if (byToken) return byToken;
+  }
+
+  return combat.combatants.find(c => c.actorId === actor.id) || null;
+}
+
+function _queueAiTurnAttackEvent(actor, sourceToken, eventData) {
+  const combatant = _getCombatantForActor(actor, sourceToken);
+  if (!combatant) return false;
+
+  const combat = game.combat;
+  const key = combatant.id;
+  const existing = _aiTurnAttackEvents.get(key);
+  if (existing && existing.round === combat.round && existing.turn === combat.turn) {
+    existing.events.push(eventData);
+  } else {
+    _aiTurnAttackEvents.set(key, {
+      combatId: combat.id,
+      combatantId: combatant.id,
+      actor,
+      sourceToken,
+      round: combat.round,
+      turn: combat.turn,
+      events: [eventData],
+    });
+  }
+  return true;
+}
+
+async function _flushAiTurnSummary(combatantId) {
+  const state = _aiTurnAttackEvents.get(combatantId);
+  if (!state || !state.events?.length) return;
+
+  _aiTurnAttackEvents.delete(combatantId);
+
+  const actor = state.actor;
+  if (!actor || actor.type !== "npc") return;
+
+  const hits = state.events.filter(e => e.hit).length;
+  const misses = state.events.length - hits;
+  const crits = state.events.filter(e => e.isCritical).length;
+  const targets = [...new Set(state.events.map(e => e.targetName).filter(Boolean))];
+  const attacks = state.events.map(e => e.attackName).filter(Boolean);
+  const bestAttack = attacks[0] || "attack";
+
+  const roundSummary = {
+    totalAttacks: state.events.length,
+    hits,
+    misses,
+    crits,
+    targets,
+    attacks,
+  };
+
+  const firstEvent = state.events[0];
+  const targetToken = firstEvent?.targetTokenUuid ? fromUuidSync(firstEvent.targetTokenUuid) : null;
+
+  await _aiNpcTaunt(actor, bestAttack, hits > 0, targetToken, {
+    isCritical: crits > 0,
+    roundSummary,
+    triggerOverride: "turn_summary",
+  });
+}
+
+async function _handleAiTurnAdvance(combat) {
+  if (!combat) return;
+
+  const currentCombatantId = combat.combatant?.id || null;
+
+  if (_aiActiveTurn && _aiActiveTurn.combatId === combat.id) {
+    const previousChanged = currentCombatantId !== _aiActiveTurn.combatantId;
+    if (previousChanged) {
+      await _flushAiTurnSummary(_aiActiveTurn.combatantId);
+    }
+  }
+
+  _aiActiveTurn = currentCombatantId ? { combatId: combat.id, combatantId: currentCombatantId } : null;
+}
+
+// ── midi-qol hook — snapshot data only, schedule AI call well after workflow ──
+Hooks.on("midi-qol.AttackRollComplete", (workflow) => {
   if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
   if (!game.user.isGM) return;
 
   const actor = workflow.actor;
   if (!actor || actor.type !== "npc") return;
 
-  const attackName = workflow.item?.name || "attack";
-  const target     = workflow.targets?.first();
-  const targetName = target?.name || "you";
-  const hit        = workflow.attackTotal >= (target?.actor?.system?.attributes?.ac?.value ?? 10);
+  const targetToken = workflow.targets?.first?.() ?? null;
+  if (!targetToken) return;
 
-  console.log(`🤖 AI Chatbot | midi-qol hook fired for ${actor.name}`);
-  await _aiNpcTaunt(actor, attackName, hit, targetName);
+  const attackName  = workflow.item?.name || "attack";
+  const hit         = workflow.attackTotal >= (targetToken.actor?.system?.attributes?.ac?.value ?? 10);
+  const isCritical  = workflow.isCritical  ?? false;
+  const attackTotal = workflow.attackTotal ?? null;
+  const sourceToken = workflow.token ?? null;
+
+  const eventData = {
+    attackName,
+    hit,
+    isCritical,
+    attackTotal,
+    targetName: targetToken.name || "unknown",
+    targetTokenUuid: targetToken.document?.uuid || null,
+  };
+
+  // In combat, queue all attacks and emit one taunt at end of this creature's turn.
+  if (_queueAiTurnAttackEvent(actor, sourceToken, eventData)) return;
+
+  // Outside combat, fallback to immediate taunt.
+  _aiNpcTaunt(actor, attackName, hit, targetToken, { isCritical, attackTotal })
+    .catch(err => console.error("DM Panic Button | AI chatbot error:", err));
 });
 
 // ── Vanilla dnd5e fallback (skipped when midi-qol active) ──
-Hooks.on("createChatMessage", async (message) => {
+Hooks.on("createChatMessage", (message) => {
   if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
   if (!game.user.isGM) return;
   if (game.modules.get("midi-qol")?.active) return;
@@ -2901,11 +3111,56 @@ Hooks.on("createChatMessage", async (message) => {
   const actor = game.actors?.get(message.speaker?.actor);
   if (!actor || actor.type !== "npc") return;
 
-  const roll       = message.rolls?.[0];
-  const targets    = Array.from(game.user.targets ?? []);
-  const targetName = targets[0]?.name || "you";
-  const targetAC   = targets[0]?.actor?.system?.attributes?.ac?.value ?? 10;
-  const hit        = (roll?.total ?? 0) >= targetAC;
+  const roll        = message.rolls?.[0];
+  const targets     = Array.from(game.user.targets ?? []);
+  const targetToken = targets[0] ?? null;
+  if (!targetToken) return;
 
-  await _aiNpcTaunt(actor, message.flavor || "attack", hit, targetName);
+  const targetAC = targetToken.actor?.system?.attributes?.ac?.value ?? 10;
+  const hit      = (roll?.total ?? 0) >= targetAC;
+  const sourceToken = message.speaker?.token ? canvas.tokens?.get(message.speaker.token) : null;
+  const eventData = {
+    attackName: message.flavor || "attack",
+    hit,
+    isCritical: false,
+    attackTotal: roll?.total ?? null,
+    targetName: targetToken.name || "unknown",
+    targetTokenUuid: targetToken.document?.uuid || null,
+  };
+
+  if (_queueAiTurnAttackEvent(actor, sourceToken, eventData)) return;
+
+  _aiNpcTaunt(actor, message.flavor || "attack", hit, targetToken)
+    .catch(err => console.error("DM Panic Button | AI chatbot error:", err));
+});
+
+Hooks.on("updateCombat", (combat, changed) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+
+  if (!Object.prototype.hasOwnProperty.call(changed, "turn") && !Object.prototype.hasOwnProperty.call(changed, "round")) return;
+
+  _handleAiTurnAdvance(combat).catch(err => console.error("DM Panic Button | AI turn summary error:", err));
+});
+
+Hooks.on("deleteCombat", (combat) => {
+  if (!game.settings.get("dm-panic-button", "aiChatbotEnabled")) return;
+  if (!game.user.isGM) return;
+
+  const pendingIds = [..._aiTurnAttackEvents.values()]
+    .filter(v => v.combatId === combat.id)
+    .map(v => v.combatantId);
+
+  for (const combatantId of pendingIds) {
+    _flushAiTurnSummary(combatantId).catch(err => console.error("DM Panic Button | AI final turn summary error:", err));
+  }
+
+  if (_aiActiveTurn?.combatId === combat.id) _aiActiveTurn = null;
+});
+
+// ── NPC taunt notification — fires on every client that receives the chat message ──
+Hooks.on("createChatMessage", (message) => {
+  if (!message.getFlag("dm-panic-button", "npcTaunt")) return;
+  const { attackerName, taunt } = message.flags["dm-panic-button"];
+  ui.notifications.info(`${attackerName}: "${taunt}"`);
 });
