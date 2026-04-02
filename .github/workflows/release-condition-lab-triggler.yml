@@ -48,7 +48,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
+          git stash
           git checkout main
+          git stash pop
           git add modules/condition-lab-triggler/dist/module.json
           git diff --cached --quiet || git commit -m "chore: update condition-lab-triggler dist/module.json for v${{ steps.version.outputs.VERSION }}"
           git push origin main
