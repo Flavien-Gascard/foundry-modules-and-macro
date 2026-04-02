@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Token Maker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0e0c0a;
+    color: #ccc0a0;
+    font-family: 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+    gap: 20px;
+  }
+  h1 { color: #bfa046; font-size: 1.6em; letter-spacing: 2px; text-transform: uppercase; }
+  .subtitle { color: #7a6a40; font-size: 0.85em; }
+  .server-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.78em; color: #7a6a40;
+  }
+  .server-row input {
+    background: #1a1208; border: 1px solid #3a2a0b; color: #ccc0a0;
+    border-radius: 4px; padding: 3px 8px; font-size: 1em; width: 200px;
+  }
+  .workspace {
+    display: flex; gap: 32px; align-items: flex-start;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .panel { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .panel-label { color: #bfa046; font-size: 0.75em; letter-spacing: 1px; text-transform: uppercase; }
+  .drop-zone {
+    width: 260px; height: 260px;
+    border: 2px dashed #3a2a0b; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer; transition: border-color 0.2s, background 0.2s;
+    background: #1a1208; position: relative; overflow: hidden;
+  }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: #bfa046; background: #1e1a10; }
+  .drop-zone img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: none; }
+  .drop-zone .hint {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    color: #7a6a40; font-size: 0.85em; text-align: center; padding: 20px; pointer-events: none;
+  }
+  .drop-zone .hint svg { width: 40px; height: 40px; opacity: 0.5; }
+  .result-zone {
+    width: 260px; height: 260px;
+    border: 2px solid #3a2a0b; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: #1a1208; position: relative; overflow: hidden;
+  }
+  .result-zone img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: none; }
+  .result-zone .placeholder { color: #3a2a0b; font-size: 0.8em; text-align: center; padding: 20px; }
+  .spinner {
+    display: none; width: 48px; height: 48px;
+    border: 4px solid #3a2a0b; border-top-color: #bfa046;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Prompt area */
+  .prompt-area {
+    display: flex; flex-direction: column; gap: 8px;
+    width: 100%; max-width: 620px;
+  }
+  .prompt-label {
+    color: #bfa046; font-size: 0.75em; letter-spacing: 1px; text-transform: uppercase;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  textarea#prompt {
+    width: 100%; height: 90px;
+    background: #1a1208; border: 1px solid #3a2a0b; color: #ccc0a0;
+    border-radius: 5px; padding: 8px 10px; font-size: 0.88em; line-height: 1.5;
+    resize: vertical; font-family: inherit;
+  }
+  textarea#prompt:focus { outline: none; border-color: #bfa046; }
+  .prompt-hint { color: #5a4a2a; font-size: 0.75em; font-style: italic; }
+
+  /* Buttons */
+  .btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  button {
+    padding: 9px 24px; background: #2a1e08; color: #bfa046;
+    border: 1.5px solid #bfa046; border-radius: 6px; font-size: 0.9em;
+    cursor: pointer; letter-spacing: 1px; text-transform: uppercase;
+    transition: background 0.15s, color 0.15s;
+  }
+  button:hover { background: #3a2e10; color: #e7d7a1; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #describe-btn { border-color: #5a7a5a; color: #80b080; background: #0e1a0e; }
+  #describe-btn:hover { background: #162016; color: #aadaaa; }
+  #generate-btn { border-color: #bfa046; }
+  .download-btn {
+    display: none; padding: 8px 24px;
+    background: #0e2a1a; color: #80e0a0; border: 1.5px solid #2a8a4a;
+    border-radius: 6px; font-size: 0.85em; cursor: pointer;
+    text-decoration: none; text-align: center;
+    letter-spacing: 1px; text-transform: uppercase; transition: background 0.15s;
+  }
+  .download-btn:hover { background: #163a22; }
+  .error { color: #ff8080; font-size: 0.82em; text-align: center; }
+  input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<h1>⚔ Token Maker</h1>
+<p class="subtitle">Drop a portrait, describe it, tweak the prompt, generate</p>
+
+<div class="server-row">
+  Server: <input type="text" id="server-url" value="http://localhost:3001" />
+</div>
+
+<div class="workspace">
+  <div class="panel">
+    <div class="panel-label">Source Portrait</div>
+    <div class="drop-zone" id="drop-zone">
+      <div class="hint">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 16V4m0 0L8 8m4-4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 20h18" stroke-linecap="round"/>
+        </svg>
+        Drop image here<br>or click to browse
+      </div>
+      <img id="source-img" alt="source" />
+    </div>
+    <input type="file" id="file-input" accept="image/*" />
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">Generated Token</div>
+    <div class="result-zone" id="result-zone">
+      <div class="placeholder">Token will appear here</div>
+      <div class="spinner" id="spinner"></div>
+      <img id="result-img" alt="token" />
+    </div>
+    <a class="download-btn" id="download-btn" download="token.png">⬇ Download Token</a>
+  </div>
+</div>
+
+<div class="prompt-area">
+  <div class="prompt-label">
+    Prompt
+    <span class="prompt-hint">Edit freely — this is sent straight to Stability AI</span>
+  </div>
+  <textarea id="prompt" placeholder="Drop an image and click Describe, or write your own prompt…"></textarea>
+  <div class="btn-row">
+    <button id="describe-btn" disabled>✦ Describe with Claude</button>
+    <button id="generate-btn" disabled>Generate Token</button>
+  </div>
+  <div class="error" id="error-msg"></div>
+</div>
+
+<script>
+  const dropZone    = document.getElementById('drop-zone');
+  const fileInput   = document.getElementById('file-input');
+  const sourceImg   = document.getElementById('source-img');
+  const resultZone  = document.getElementById('result-zone');
+  const resultImg   = document.getElementById('result-img');
+  const spinner     = document.getElementById('spinner');
+  const describeBtn = document.getElementById('describe-btn');
+  const generateBtn = document.getElementById('generate-btn');
+  const dlBtn       = document.getElementById('download-btn');
+  const errorMsg    = document.getElementById('error-msg');
+  const promptBox   = document.getElementById('prompt');
+  const serverUrl   = document.getElementById('server-url');
+
+  let sourceDataUrl = null;
+
+  // ── Drag & drop / file pick ──
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+  dropZone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+  function loadFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      sourceDataUrl = e.target.result;
+      sourceImg.src = sourceDataUrl;
+      sourceImg.style.display = 'block';
+      dropZone.querySelector('.hint').style.display = 'none';
+      describeBtn.disabled = false;
+      generateBtn.disabled = false;
+      errorMsg.textContent = '';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ── Describe button — fills prompt via Claude Vision ──
+  describeBtn.addEventListener('click', async () => {
+    if (!sourceDataUrl) return;
+    errorMsg.textContent = '';
+    describeBtn.disabled = true;
+    describeBtn.textContent = '⏳ Describing…';
+    try {
+      const url = (serverUrl.value || 'http://localhost:3001').replace(/\/$/, '');
+      const res = await fetch(`${url}/token/describe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: sourceDataUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+      // Pre-fill with a ready-to-use top-down prompt the user can tweak
+      promptBox.value = `overhead top-down view, tabletop RPG token, D&D miniature seen from directly above, ${data.description}, plain white background, square composition, studio lighting from above`;
+      promptBox.focus();
+    } catch (err) {
+      errorMsg.textContent = '⚠ ' + err.message;
+    } finally {
+      describeBtn.disabled = false;
+      describeBtn.textContent = '✦ Describe with Claude';
+    }
+  });
+
+  // ── Generate button ──
+  generateBtn.addEventListener('click', async () => {
+    const prompt = promptBox.value.trim();
+    if (!prompt) { errorMsg.textContent = '⚠ Enter a prompt first.'; return; }
+    errorMsg.textContent = '';
+    generateBtn.disabled = true;
+    describeBtn.disabled = true;
+    resultImg.style.display = 'none';
+    resultZone.querySelector('.placeholder').style.display = 'none';
+    dlBtn.style.display = 'none';
+    spinner.style.display = 'block';
+
+    try {
+      const url = (serverUrl.value || 'http://localhost:3001').replace(/\/$/, '');
+      const res = await fetch(`${url}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Server error ${res.status}`);
+      resultImg.src = data.image;
+      resultImg.style.display = 'block';
+      dlBtn.href = data.image;
+      dlBtn.style.display = 'inline-block';
+    } catch (err) {
+      errorMsg.textContent = '⚠ ' + err.message;
+      resultZone.querySelector('.placeholder').style.display = 'block';
+    } finally {
+      spinner.style.display = 'none';
+      generateBtn.disabled = false;
+      describeBtn.disabled = !sourceDataUrl;
+    }
+  });
+</script>
+</body>
+</html>
