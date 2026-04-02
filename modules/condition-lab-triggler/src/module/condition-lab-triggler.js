@@ -244,8 +244,8 @@ Hooks.on("updateCombat", (combat, update, options, userId) => {
 /* -------------- Scene Controls -------------- */
 Hooks.on("getSceneControlButtons", function (hudButtons) {
 	if (game.user.isGM && game.settings.get("condition-lab-triggler", "sceneControls")) {
-		const hud = $(hudButtons).find((val) => val.name === "token");
-		if (hud) {
+		const hud = hudButtons.find?.((val) => val.name === "token") ?? hudButtons.tokens;
+		if (hud?.tools) {
 			hud.tools.push({
 				name: "CLT.ENHANCED_CONDITIONS.Lab.Title",
 				title: "CLT.ENHANCED_CONDITIONS.Lab.Title",
