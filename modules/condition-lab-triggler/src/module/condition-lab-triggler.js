@@ -246,20 +246,26 @@ Hooks.on("getSceneControlButtons", function (hudButtons) {
 	if (game.user.isGM && game.settings.get("condition-lab-triggler", "sceneControls")) {
 		const hud = hudButtons.find?.((val) => val.name === "token") ?? hudButtons.tokens;
 		if (hud?.tools) {
-			hud.tools.push({
+			const labTool = {
 				name: "CLT.ENHANCED_CONDITIONS.Lab.Title",
 				title: "CLT.ENHANCED_CONDITIONS.Lab.Title",
 				icon: "fas fa-flask",
 				button: true,
 				onClick: async () => new ConditionLab().render(true)
-			});
-			hud.tools.push({
+			};
+			const trigglerTool = {
 				name: "Triggler",
 				title: "Triggler",
 				icon: "fas fa-exclamation",
 				button: true,
 				onClick: async () => new TrigglerForm().render(true)
-			});
+			};
+			if (Array.isArray(hud.tools)) {
+				hud.tools.push(labTool, trigglerTool);
+			} else {
+				hud.tools["conditionLab"] = labTool;
+				hud.tools["triggler"] = trigglerTool;
+			}
 		}
 	}
 });
