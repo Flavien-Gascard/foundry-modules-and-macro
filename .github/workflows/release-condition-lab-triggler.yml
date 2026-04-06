@@ -45,12 +45,17 @@ jobs:
 
       - name: Commit updated module.json to main
         run: |
+          # Save the updated module.json before switching branches
+          cp modules/condition-lab-triggler/dist/module.json /tmp/clt-module.json
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          git stash
           git checkout main
-          git stash pop
+
+          # Apply the updated module.json directly (no stash conflicts)
+          cp /tmp/clt-module.json modules/condition-lab-triggler/dist/module.json
+
           git add modules/condition-lab-triggler/dist/module.json
           git diff --cached --quiet || git commit -m "chore: update condition-lab-triggler dist/module.json for v${{ steps.version.outputs.VERSION }}"
           git push origin main
