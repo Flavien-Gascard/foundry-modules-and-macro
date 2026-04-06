@@ -264,13 +264,17 @@ class EnhancedConditions {
 		if (!(effect instanceof ActiveEffect)) return;
 
 		const conditionId = effect.getFlag("condition-lab-triggler", "conditionId");
-		const isDefault = !conditionId;
 		const effectIds = conditionId ? [conditionId] : Array.from(effect.statuses);
 
 		const conditions = effectIds.map((effectId) => ({
 			...EnhancedConditions.lookupEntryMapping(effectId),
 			effectId
 		}));
+
+		// Conditions that match a CLT map entry (has options), whether CLT-flagged or applied by another module (e.g. midi-qol)
+		const mappedConditions = conditionId ? conditions : conditions.filter((c) => c?.options !== undefined);
+		// Truly "default" = no CLT flag AND no statuses match the CLT map
+		const isDefault = !conditionId && mappedConditions.length === 0;
 
 		const toOutput = conditions.filter((condition) => (isDefault && game.settings.get("condition-lab-triggler", "defaultConditionsOutputToChat"))
 			|| (game.settings.get("condition-lab-triggler", "conditionsOutputToChat") && condition?.options?.outputChat));
@@ -281,27 +285,27 @@ class EnhancedConditions {
 		}
 
 		if (isDefault) return;
-		// If not default we only have one condition.
-		const condition = conditions[0];
-		let macros = [];
 
-		switch (type) {
-			case "create":
-				macros = condition.macros?.filter((m) => m.type === "apply");
-				if (condition.options?.removeOthers) EnhancedConditions._removeOtherConditions(actor, condition.id);
-				if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: true });
+		// Run behaviors for each matched CLT condition (works for both CLT-flagged and externally-applied effects)
+		for (const condition of mappedConditions) {
+			let macros = [];
 
-				break;
+			switch (type) {
+				case "create":
+					macros = condition.macros?.filter((m) => m.type === "apply") ?? [];
+					if (condition.options?.removeOthers) EnhancedConditions._removeOtherConditions(actor, condition.id);
+					if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: true });
+					break;
 
-			case "delete":
-				macros = condition.macros?.filter((m) => m.type === "remove");
-				if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: false });
-				break;
+				case "delete":
+					macros = condition.macros?.filter((m) => m.type === "remove") ?? [];
+					if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: false });
+					break;
+			}
+
+			const macroIds = macros?.length ? macros.filter((m) => m.id).map((m) => m.id) : null;
+			if (macroIds?.length) EnhancedConditions._processMacros(macroIds, actor);
 		}
-
-		const macroIds = macros?.length ? macros.filter((m) => m.id).map((m) => m.id) : null;
-
-		if (macroIds?.length) EnhancedConditions._processMacros(macroIds, actor);
 	}
 
 	/**
@@ -1045,10 +1049,17 @@ class EnhancedConditions {
 
 			if (!effects) continue;
 
+			// Collect condition IDs from CLT-flagged effects, falling back to statuses for externally-applied effects (e.g. midi-qol)
 			const effectIds =
 				effects instanceof Array
-					? effects.map((e) => e.getFlag("condition-lab-triggler", "conditionId"))
-					: effects.getFlag("condition-lab-triggler", "conditionId");
+					? effects.flatMap((e) => {
+						const cid = e.getFlag("condition-lab-triggler", "conditionId");
+						return cid ? [cid] : Array.from(e.statuses ?? []);
+					})
+					: (() => {
+						const cid = effects.getFlag("condition-lab-triggler", "conditionId");
+						return cid ? [cid] : Array.from(effects.statuses ?? []);
+					})();
 
 			if (!effectIds.length) continue;
 
@@ -1210,7 +1221,8 @@ class EnhancedConditions {
 				return conditions.some(
 					(e) =>
 						e?.flags["condition-lab-triggler"].conditionId
-						=== ae.getFlag("condition-lab-triggler", "conditionId")
+							=== ae.getFlag("condition-lab-triggler", "conditionId")
+						|| (e?.id && ae.statuses?.has(e.id))
 				);
 			});
 
@@ -2212,10 +2224,7 @@ class EnhancedConditionOptionConfig extends FormApplication {
 		if (!event.target?.checked) return;
 		const targetName = event.target?.name;
 		const propertyName = Sidekick.toCamelCase(targetName, "-");
-		const specialStatusEffectsProps = Object.values({
-			blinded: { optionProperty: "blindToken" },
-			invisible: { optionProperty: "markInvisible" }
-		}).map((k) => k.optionProperty);
+		const specialStatusEffectsProps = Object.values(CONFIG.specialStatusEffects);
 
 		if (!propertyName || !specialStatusEffectsProps) return;
 
@@ -2308,16 +2317,12 @@ class EnhancedConditionOptionConfig extends FormApplication {
 	/**
 	 * Get the enum for a special status effect based on the field name
 	 * @param {string} field
-	 * @returns {string | undefined} BLIND, INVISIBLE, or DEFEATED
+	 * @returns {string | undefined} The CONFIG.specialStatusEffects key whose value matches this field
 	 */
 	getSpecialStatusEffectByField(field) {
-		switch (field) {
-			case "blind-token":
-				return "BLIND";
-
-			case "mark-invisible":
-				return "INVISIBLE";
-		}
+		return Object.keys(CONFIG.specialStatusEffects).find(
+			(key) => CONFIG.specialStatusEffects[key] === field
+		);
 	}
 
 	/**
@@ -3924,22 +3929,28 @@ Hooks.on("updateCombat", (combat, update, options, userId) => {
 /* -------------- Scene Controls -------------- */
 Hooks.on("getSceneControlButtons", function (hudButtons) {
 	if (game.user.isGM && game.settings.get("condition-lab-triggler", "sceneControls")) {
-		const hud = $(hudButtons).find((val) => val.name === "token");
-		if (hud) {
-			hud.tools.push({
+		const hud = hudButtons.find?.((val) => val.name === "token") ?? hudButtons.tokens;
+		if (hud?.tools) {
+			const labTool = {
 				name: "CLT.ENHANCED_CONDITIONS.Lab.Title",
 				title: "CLT.ENHANCED_CONDITIONS.Lab.Title",
 				icon: "fas fa-flask",
 				button: true,
 				onClick: async () => new ConditionLab().render(true)
-			});
-			hud.tools.push({
+			};
+			const trigglerTool = {
 				name: "Triggler",
 				title: "Triggler",
 				icon: "fas fa-exclamation",
 				button: true,
 				onClick: async () => new TrigglerForm().render(true)
-			});
+			};
+			if (Array.isArray(hud.tools)) {
+				hud.tools.push(labTool, trigglerTool);
+			} else {
+				hud.tools["conditionLab"] = labTool;
+				hud.tools["triggler"] = trigglerTool;
+			}
 		}
 	}
 });

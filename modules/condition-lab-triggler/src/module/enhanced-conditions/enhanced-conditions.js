@@ -25,13 +25,17 @@ export class EnhancedConditions {
 		if (!(effect instanceof ActiveEffect)) return;
 
 		const conditionId = effect.getFlag("condition-lab-triggler", "conditionId");
-		const isDefault = !conditionId;
 		const effectIds = conditionId ? [conditionId] : Array.from(effect.statuses);
 
 		const conditions = effectIds.map((effectId) => ({
 			...EnhancedConditions.lookupEntryMapping(effectId),
 			effectId
 		}));
+
+		// Conditions that match a CLT map entry (has options), whether CLT-flagged or applied by another module (e.g. midi-qol)
+		const mappedConditions = conditionId ? conditions : conditions.filter((c) => c?.options !== undefined);
+		// Truly "default" = no CLT flag AND no statuses match the CLT map
+		const isDefault = !conditionId && mappedConditions.length === 0;
 
 		const toOutput = conditions.filter((condition) => (isDefault && game.settings.get("condition-lab-triggler", "defaultConditionsOutputToChat"))
 			|| (game.settings.get("condition-lab-triggler", "conditionsOutputToChat") && condition?.options?.outputChat));
@@ -42,30 +46,30 @@ export class EnhancedConditions {
 		}
 
 		if (isDefault) return;
-		// If not default we only have one condition.
-		const condition = conditions[0];
-		let macros = [];
 
-		switch (type) {
-			case "create":
-				macros = condition.macros?.filter((m) => m.type === "apply");
-				if (condition.options?.removeOthers) EnhancedConditions._removeOtherConditions(actor, condition.id);
-				if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: true });
+		// Run behaviors for each matched CLT condition (works for both CLT-flagged and externally-applied effects)
+		for (const condition of mappedConditions) {
+			let macros = [];
 
-				break;
+			switch (type) {
+				case "create":
+					macros = condition.macros?.filter((m) => m.type === "apply") ?? [];
+					if (condition.options?.removeOthers) EnhancedConditions._removeOtherConditions(actor, condition.id);
+					if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: true });
+					break;
 
-			case "delete":
-				macros = condition.macros?.filter((m) => m.type === "remove");
-				if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: false });
-				break;
+				case "delete":
+					macros = condition.macros?.filter((m) => m.type === "remove") ?? [];
+					if (condition.options?.markDefeated) EnhancedConditions._toggleDefeated(actor, { markDefeated: false });
+					break;
 
-			default:
-				break;
+				default:
+					break;
+			}
+
+			const macroIds = macros?.length ? macros.filter((m) => m.id).map((m) => m.id) : null;
+			if (macroIds?.length) EnhancedConditions._processMacros(macroIds, actor);
 		}
-
-		const macroIds = macros?.length ? macros.filter((m) => m.id).map((m) => m.id) : null;
-
-		if (macroIds?.length) EnhancedConditions._processMacros(macroIds, actor);
 	}
 
 	/**
@@ -809,10 +813,17 @@ export class EnhancedConditions {
 
 			if (!effects) continue;
 
+			// Collect condition IDs from CLT-flagged effects, falling back to statuses for externally-applied effects (e.g. midi-qol)
 			const effectIds =
 				effects instanceof Array
-					? effects.map((e) => e.getFlag("condition-lab-triggler", "conditionId"))
-					: effects.getFlag("condition-lab-triggler", "conditionId");
+					? effects.flatMap((e) => {
+						const cid = e.getFlag("condition-lab-triggler", "conditionId");
+						return cid ? [cid] : Array.from(e.statuses ?? []);
+					})
+					: (() => {
+						const cid = effects.getFlag("condition-lab-triggler", "conditionId");
+						return cid ? [cid] : Array.from(effects.statuses ?? []);
+					})();
 
 			if (!effectIds.length) continue;
 
@@ -974,7 +985,8 @@ export class EnhancedConditions {
 				return conditions.some(
 					(e) =>
 						e?.flags["condition-lab-triggler"].conditionId
-						=== ae.getFlag("condition-lab-triggler", "conditionId")
+							=== ae.getFlag("condition-lab-triggler", "conditionId")
+						|| (e?.id && ae.statuses?.has(e.id))
 				);
 			});
 
