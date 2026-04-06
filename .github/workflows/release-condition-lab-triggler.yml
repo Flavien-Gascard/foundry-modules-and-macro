@@ -51,7 +51,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
-          git checkout main
+          git checkout -f main
 
           # Apply the updated module.json directly (no stash conflicts)
           cp /tmp/clt-module.json modules/condition-lab-triggler/dist/module.json
