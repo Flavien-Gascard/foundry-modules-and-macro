@@ -85,7 +85,7 @@
 		"verified": "12"
 	},
 	"url": "https://github.com/Flavien-Gascard/foundry-modules-and-macro",
-	"version": "1.4.4",
+	"version": "1.4.5",
 	"manifest": "https://raw.githubusercontent.com/Flavien-Gascard/foundry-modules-and-macro/main/modules/condition-lab-triggler/dist/module.json",
-	"download": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/releases/download/condition-lab-triggler-v1.4.4/condition-lab-triggler.zip"
+	"download": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/releases/download/condition-lab-triggler-v1.4.5/condition-lab-triggler.zip"
 }
