@@ -32,6 +32,13 @@ export class EnhancedConditions {
 			effectId
 		}));
 
+		// If an external source (e.g. dnd5e concentration) created this effect with a different icon,
+		// update it to use the CLT condition map's icon
+		if (type === "create" && !conditionId) {
+			const iconFix = conditions.find((c) => c?.img && effect.img !== c.img);
+			if (iconFix) effect.update({ img: iconFix.img }).catch(() => {});
+		}
+
 		// Conditions that match a CLT map entry (has options), whether CLT-flagged or applied by another module (e.g. midi-qol)
 		const mappedConditions = conditionId ? conditions : conditions.filter((c) => c?.options !== undefined);
 		// Truly "default" = no CLT flag AND no statuses match the CLT map
