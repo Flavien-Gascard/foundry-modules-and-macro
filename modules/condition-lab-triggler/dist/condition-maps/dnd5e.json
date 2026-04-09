@@ -27,6 +27,7 @@
 		  "referenceId": "@UUID[Compendium.dnd5e.rules.w7eitkpD7QQTB6j0.JournalEntryPage.zZaEBrKkr66OWJvD]{Charmed}"
 		},
 		{
+		  "id": "concentrating",
 		  "name": "Concentrating",
 		  "icon": "systems/dnd5e/icons/svg/statuses/concentrating.svg",
 		  "referenceId": "@UUID[Compendium.dnd5e.rules.QvPDSUsAiEn3hD8s.JournalEntryPage.wre9ECSVuEyJBYhr#concentration]{Concentration}"

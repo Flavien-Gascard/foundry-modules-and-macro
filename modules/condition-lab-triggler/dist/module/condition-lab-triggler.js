@@ -3860,6 +3860,13 @@ Hooks.on("ready", async () => {
 	if (game.user.isGM) ;
 	// const specialStatusEffectMap = game.settings.get("condition-lab-triggler", "specialStatusEffectMapping");
 	if (conditionMap.length) EnhancedConditions._updateStatusEffects(conditionMap);
+
+	// Re-run once after canvas is ready — other modules (dnd5e, midi-qol) may re-inject their
+	// status effects during their own ready hooks, which run after CLT's. This evicts them.
+	Hooks.once("canvasReady", () => {
+		if (conditionMap.length) EnhancedConditions._updateStatusEffects(conditionMap);
+	});
+
 	setInterval(EnhancedConditions.updateConditionTimestamps, 15000);
 
 	// Save the active condition map to a convenience property
