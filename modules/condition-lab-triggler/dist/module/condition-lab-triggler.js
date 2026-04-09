@@ -272,10 +272,16 @@ class EnhancedConditions {
 		}));
 
 		// If an external source (e.g. dnd5e concentration) created this effect with a different icon,
-		// update it to use the CLT condition map's icon
+		// update it to use the CLT condition map's icon.
+		// Tries ID-based match first, then falls back to matching via CLT special-status option flags
+		// (e.g. options.concentrating === true) for cases where the CLT condition has a random ID.
 		if (type === "create" && !conditionId) {
-			const iconFix = conditions.find((c) => c?.img && effect.img !== c.img);
-			if (iconFix) effect.update({ img: iconFix.img }).catch(() => {});
+			const conditionMap = EnhancedConditions.getConditionsMap();
+			const cltEntry = conditions.find((c) => c?.img)
+				?? conditionMap.find((c) => effectIds.some((id) => c.options?.[id] === true));
+			if (cltEntry?.img && effect.img !== cltEntry.img) {
+				effect.update({ img: cltEntry.img }).catch(() => {});
+			}
 		}
 
 		// Conditions that match a CLT map entry (has options), whether CLT-flagged or applied by another module (e.g. midi-qol)
