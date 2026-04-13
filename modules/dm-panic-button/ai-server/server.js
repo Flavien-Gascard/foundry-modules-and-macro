@@ -468,6 +468,72 @@ app.post('/condense', async (req, res) => {
   }
 });
 
+// ── /scene-prep — AI scene grouping + party hooks for session prep ────
+app.post('/scene-prep', async (req, res) => {
+  const { dungeonText, party = [], campaignNotes = '' } = req.body;
+  if (!dungeonText) return res.status(400).json({ error: 'dungeonText required' });
+
+  const partySection = party.length
+    ? party.map(p => `**${p.name}**${p.class ? ` (${p.class})` : ''}:\n${p.background}`).join('\n\n---\n\n')
+    : 'No party backgrounds provided.';
+
+  try {
+    const msg = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4000,
+      system: `You are an expert D&D 5e Dungeon Master assistant specializing in Foundry VTT session prep. You analyze dungeon descriptions and break them into logical scene groupings, considering monster awareness, sound propagation, patrol routes, and party character hooks.
+
+Always respond with ONLY valid JSON — no prose before or after.`,
+      messages: [{
+        role: 'user',
+        content: `Analyze this dungeon description and break it into logical Foundry VTT scenes. Group areas by:
+- Monster awareness and sound radius (what would hear combat nearby)
+- Natural chokepoints, doors, and gates
+- Logical encounter zones (areas that form a single combat space)
+
+For each scene, generate specific hooks tied to each party member's background.
+
+DUNGEON TEXT:
+${dungeonText}
+
+PARTY BACKGROUNDS:
+${partySection}
+
+${campaignNotes ? `CAMPAIGN NOTES / AD-LIB IDEAS:\n${campaignNotes}` : ''}
+
+Return JSON:
+{
+  "scenes": [
+    {
+      "name": "Short scene name with area numbers e.g. Crystal Cavern (4d–4e)",
+      "areas": ["4d", "4e"],
+      "description": "2-3 sentence GM description of what this scene contains and its atmosphere",
+      "alertChain": "Specific description: if combat starts here, which nearby creatures hear it, how far sound travels, how long before they respond",
+      "gridSuggestion": "e.g. 40x30 squares",
+      "partyHooks": [
+        { "character": "Character name", "hook": "1-2 sentence hook connecting this scene to their background or secret" }
+      ],
+      "adlibSuggestions": [
+        "A quick tailored ad-lib idea for this scene"
+      ]
+    }
+  ]
+}`,
+      }],
+    });
+
+    const text = msg.content[0].text.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
+    const data = JSON.parse(jsonMatch[0]);
+    logCost('scene-prep', 0.003);
+    res.json(data);
+  } catch (err) {
+    console.error('scene-prep error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── /chat — global DM assistant with intent detection ────────────────
 const INTENT_IMAGE = /\b(draw|sketch|paint|picture|image|art|illustrate|visualize)\b/i;
 const INTENT_BRIEF = /\b(brief me|briefing|give me a brief)\b/i;

@@ -1358,6 +1358,7 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
         <div id="panic-create-bar" style="display:flex;gap:6px;margin:2px 0 6px 0;">
           <button id="panic-create-item-btn" class="panic-btn panic-pill" style="flex:1;">➕ New Item</button>
           <button id="panic-create-actor-btn" class="panic-btn panic-pill" style="flex:1;">➕ New Actor</button>
+          <button id="panic-scene-prep-btn" class="panic-btn panic-pill" style="flex:1;background:#1a1a2e;border-color:#5a3e8b;color:#c9a8ff;">🗺 Scene Prep</button>
         </div>`);
     }
 
@@ -1760,6 +1761,10 @@ Hooks.on("renderDMPanicButton",(app,html)=>{
 
   html.find('#panic-create-item-btn').on('click', () => openCreateItemDialog(() => input.trigger("input")));
   html.find('#panic-create-actor-btn').on('click', () => openCreateActorDialog(() => input.trigger("input")));
+  html.find('#panic-scene-prep-btn').on('click', () => {
+    const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+    openScenePrepDialog(serverUrl);
+  });
 
 
   async function renderResults(list){
@@ -2793,6 +2798,190 @@ function openAiChatDialog(serverUrl) {
   }, { width: 520, height: "auto" });
 
   chatDialog.render(true);
+}
+
+// ── Scene Prep ───────────────────────────────────
+function openScenePrepDialog(serverUrl) {
+  const partyActors = game.actors.filter(a => a.type === "character" && a.hasPlayerOwner);
+  const IS = "background:#12100e;color:#ccc0a0;border:1px solid #5a3e1b;padding:4px 6px;border-radius:3px;width:100%;box-sizing:border-box";
+
+  const partyChecks = partyActors.length
+    ? partyActors.map(a =>
+        `<label style="display:flex;align-items:center;gap:6px;color:#ccc0a0;margin-bottom:4px;cursor:pointer">
+          <input type="checkbox" data-actor-id="${a.id}" checked style="accent-color:#c9a84c"> ${a.name}
+        </label>`
+      ).join("")
+    : `<span style="color:#888">No player characters found in Actors.</span>`;
+
+  const d = new Dialog({
+    title: "🗺 AI Scene Prep",
+    content: `
+    <style>
+      #spdlg { font-family:inherit;color:#ccc0a0;font-size:0.93em }
+      #spdlg .ms { background:#1a1208;border:1px solid #5a3e1b;border-radius:5px;padding:10px 12px;margin-bottom:8px }
+      #spdlg .mt { color:#c9a84c;font-size:0.76em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px;border-bottom:1px solid #3a2510;padding-bottom:3px }
+      #spdlg textarea { ${IS} font-family:inherit;resize:vertical }
+      #spdlg textarea:focus { outline:none;border-color:#c9a84c }
+    </style>
+    <div id="spdlg">
+      <div class="ms">
+        <div class="mt">📜 Dungeon Description</div>
+        <textarea id="sp-dungeon" rows="10" placeholder="Paste sourcebook text here — areas, rooms, monster descriptions, sound/awareness notes..."></textarea>
+      </div>
+      <div class="ms">
+        <div class="mt">🧙 Include Party Members</div>
+        ${partyChecks}
+      </div>
+      <div class="ms">
+        <div class="mt">📝 Campaign Notes <span style="color:#6a5a3a;font-size:0.85em;text-transform:none;letter-spacing:0">(optional — current story arc, ad-lib ideas, etc.)</span></div>
+        <textarea id="sp-notes" rows="3" placeholder="e.g. Party suspects Wyllow... Shadow has a mission from the Winter Court..."></textarea>
+      </div>
+    </div>`,
+    buttons: {
+      analyze: {
+        label: "🔍 Analyze →",
+        callback: async (html) => {
+          const dungeonText = html.find("#sp-dungeon").val().trim();
+          if (!dungeonText) { ui.notifications.warn("Paste some dungeon text first!"); return; }
+
+          const selectedIds = html.find("input[data-actor-id]:checked").map((_, el) => el.dataset.actorId).get();
+          const party = selectedIds.map(id => {
+            const a = game.actors.get(id);
+            if (!a) return null;
+            const bio = (a.system?.details?.biography?.value || "")
+              .replace(/<[^>]*>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .substring(0, 1500);
+            return {
+              name: a.name,
+              class: a.system?.details?.class || "",
+              background: bio || "No background recorded.",
+            };
+          }).filter(Boolean);
+
+          const campaignNotes = html.find("#sp-notes").val().trim();
+
+          ui.notifications.info("🗺 Analyzing dungeon… this may take 15–20 seconds.");
+          try {
+            const res = await fetch(`${serverUrl}/scene-prep`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dungeonText, party, campaignNotes }),
+            });
+            if (!res.ok) { ui.notifications.error(`Scene prep failed: ${res.status}`); return; }
+            const { scenes, error } = await res.json();
+            if (error) { ui.notifications.error(`Scene prep error: ${error}`); return; }
+            if (!scenes?.length) { ui.notifications.warn("No scenes returned from AI."); return; }
+            _showScenePrepResults(scenes);
+          } catch (err) {
+            console.error("DM Panic Button | Scene Prep error:", err);
+            ui.notifications.error("Scene prep failed — is the AI server running?");
+          }
+        },
+      },
+      cancel: { label: "Cancel" },
+    },
+    default: "analyze",
+  }, { width: 520 });
+  d.render(true);
+}
+
+function _showScenePrepResults(scenes) {
+  const IS_CARD = "background:#1a1208;border:1px solid #5a3e1b;border-radius:6px;padding:12px;margin-bottom:10px";
+  const IS_LBL  = "color:#c9a84c;font-size:0.75em;letter-spacing:.08em;text-transform:uppercase;margin:8px 0 3px 0;border-bottom:1px solid #3a2510;padding-bottom:2px";
+
+  const sceneCards = scenes.map((s, i) => {
+    const hookHtml = (s.partyHooks || []).map(h =>
+      `<div style="margin-bottom:5px"><span style="color:#88c088;font-weight:bold">${h.character}:</span> <span style="color:#ccc0a0">${h.hook}</span></div>`
+    ).join("");
+    const adlibHtml = (s.adlibSuggestions || []).map(a =>
+      `<li style="color:#ccc0a0;margin-bottom:3px">${a}</li>`
+    ).join("");
+    const areasStr = (s.areas || []).join(", ");
+
+    return `<div style="${IS_CARD}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="color:#c9a84c;font-weight:bold;font-size:1.05em">${s.name}</div>
+        ${areasStr ? `<div style="color:#888;font-size:0.8em">Areas: ${areasStr}</div>` : ""}
+      </div>
+      <div style="${IS_LBL}">📝 Description</div>
+      <div style="color:#ccc0a0;font-size:0.9em;margin-bottom:6px">${s.description}</div>
+      ${s.alertChain ? `<div style="${IS_LBL}">🔊 Alert Chain</div>
+      <div style="color:#e08060;font-size:0.9em;margin-bottom:6px">${s.alertChain}</div>` : ""}
+      ${s.gridSuggestion ? `<div style="color:#888;font-size:0.8em;margin-bottom:6px">Suggested grid: ${s.gridSuggestion}</div>` : ""}
+      ${hookHtml ? `<div style="${IS_LBL}">🎭 Party Hooks</div><div style="margin-bottom:6px">${hookHtml}</div>` : ""}
+      ${adlibHtml ? `<div style="${IS_LBL}">💡 Ad-lib Ideas</div><ul style="margin:0 0 6px 14px;padding:0">${adlibHtml}</ul>` : ""}
+      <button class="sp-create-btn panic-btn panic-pill" data-idx="${i}" style="width:100%;margin-top:4px">✅ Create Scene</button>
+    </div>`;
+  }).join("");
+
+  const d = new Dialog({
+    title: `🗺 Scene Prep — ${scenes.length} Scene${scenes.length !== 1 ? "s" : ""}`,
+    content: `
+    <style>
+      #spres { font-family:inherit;color:#ccc0a0;font-size:0.9em;max-height:520px;overflow-y:auto;padding-right:4px }
+    </style>
+    <div id="spres">${sceneCards}</div>`,
+    buttons: {
+      createAll: {
+        label: "✅ Create All",
+        callback: async () => {
+          for (const s of scenes) await _createSceneFromPrep(s);
+          ui.notifications.info(`✅ Created ${scenes.length} scene${scenes.length !== 1 ? "s" : ""}!`);
+        },
+      },
+      close: { label: "Close" },
+    },
+    default: "close",
+    render: (html) => {
+      html.find(".sp-create-btn").on("click", async function () {
+        const idx = parseInt($(this).data("idx"));
+        await _createSceneFromPrep(scenes[idx]);
+        $(this).text("✅ Created!").prop("disabled", true);
+        ui.notifications.info(`Scene "${scenes[idx].name}" created!`);
+      });
+    },
+  }, { width: 580 });
+  d.render(true);
+}
+
+async function _createSceneFromPrep(sceneData) {
+  const hookRows = (sceneData.partyHooks || []).map(h =>
+    `<li style="color:#ccc0a0;font-size:1.2em;line-height:1.8"><strong style="color:#88c088">${h.character}:</strong> ${h.hook}</li>`
+  ).join("");
+  const adlibRows = (sceneData.adlibSuggestions || []).map(a =>
+    `<li style="color:#ccc0a0;font-size:1.2em;line-height:1.8">${a}</li>`
+  ).join("");
+  const areasStr = (sceneData.areas || []).join(", ");
+
+  const pageHtml = `
+    <h1 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">${sceneData.name}</h1>
+    ${areasStr ? `<p style="color:#888;font-size:0.95em">Areas: ${areasStr}</p>` : ""}
+    <h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">Description</h2>
+    <p style="color:#ccc0a0;font-size:1.2em;line-height:1.8">${sceneData.description}</p>
+    ${sceneData.alertChain ? `
+    <h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">🔊 Alert Chain</h2>
+    <blockquote style="border-left:3px solid #8b6914;margin:0;padding:6px 12px">
+      <p style="color:#e08060;font-size:1.1em;line-height:1.8">${sceneData.alertChain}</p>
+    </blockquote>` : ""}
+    ${sceneData.gridSuggestion ? `<p style="color:#888;font-size:0.95em">Suggested grid: ${sceneData.gridSuggestion}</p>` : ""}
+    ${hookRows ? `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">🎭 Party Hooks</h2><ul>${hookRows}</ul>` : ""}
+    ${adlibRows ? `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">💡 Ad-lib Ideas</h2><ul>${adlibRows}</ul>` : ""}`;
+
+  await Scene.create({
+    name: sceneData.name,
+    width: 2800,
+    height: 2000,
+    grid: { size: 100 },
+    ownership: { default: 0 },
+  });
+
+  await JournalEntry.create({
+    name: `${sceneData.name} — DM Notes`,
+    ownership: { default: 0 },
+    pages: [{ name: sceneData.name, type: "text", text: { content: pageHtml, format: 1 } }],
+  });
 }
 
 // ── Settings ─────────────────────────────────────
