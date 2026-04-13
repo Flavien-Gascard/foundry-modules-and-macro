@@ -2912,7 +2912,10 @@ function _showScenePrepResults(scenes) {
       ${s.gridSuggestion ? `<div style="color:#888;font-size:0.8em;margin-bottom:6px">Suggested grid: ${s.gridSuggestion}</div>` : ""}
       ${hookHtml ? `<div style="${IS_LBL}">🎭 Party Hooks</div><div style="margin-bottom:6px">${hookHtml}</div>` : ""}
       ${adlibHtml ? `<div style="${IS_LBL}">💡 Ad-lib Ideas</div><ul style="margin:0 0 6px 14px;padding:0">${adlibHtml}</ul>` : ""}
-      <button class="sp-create-btn panic-btn panic-pill" data-idx="${i}" style="width:100%;margin-top:4px">✅ Create Scene</button>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <button class="sp-create-btn panic-btn panic-pill" data-idx="${i}" style="flex:1">✅ Create Scene</button>
+        <button class="sp-map-btn panic-btn panic-pill" data-idx="${i}" style="flex:1;background:#1a1a2e;border-color:#5a3e8b;color:#c9a8ff;">🗺 Generate Map</button>
+      </div>
     </div>`;
   }).join("");
 
@@ -2941,12 +2944,64 @@ function _showScenePrepResults(scenes) {
         $(this).text("✅ Created!").prop("disabled", true);
         ui.notifications.info(`Scene "${scenes[idx].name}" created!`);
       });
+
+      html.find(".sp-map-btn").on("click", async function () {
+        const idx = parseInt($(this).data("idx"));
+        const s = scenes[idx];
+        const btn = $(this);
+        const serverUrl = game.settings.get("dm-panic-button", "aiServerUrl");
+
+        btn.text("⏳ Generating…").prop("disabled", true);
+        try {
+          const res = await fetch(`${serverUrl}/generate-map`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roomName: s.name, description: s.description }),
+          });
+          if (!res.ok) { btn.text("❌ Failed").prop("disabled", false); ui.notifications.error(`Map gen failed: ${res.status}`); return; }
+          const { image } = await res.json();
+          if (!image) { btn.text("❌ No image").prop("disabled", false); return; }
+
+          const blob = await fetch(image).then(r => r.blob());
+          const filename = `scene-${s.name.replace(/[^a-z0-9]/gi, "-").replace(/^-+|-+$/g, "").toLowerCase()}-${Date.now()}.jpg`;
+          const file = new File([blob], filename, { type: "image/jpeg" });
+          const _forgeScene = typeof ForgeVTT !== "undefined" && ForgeVTT.usingTheForge;
+          const result = await FilePicker.upload(
+            _forgeScene ? "forgevtt" : "data",
+            _forgeScene ? "Assets/battle-maps" : "battle-maps",
+            file,
+            { notify: false }
+          );
+
+          const existing = game.scenes.getName(s.name);
+          if (existing) {
+            await existing.update({ "background.src": result.path });
+            ui.notifications.info(`Map set for "${s.name}"!`);
+          } else {
+            await Scene.create({
+              name: s.name,
+              width: 2800,
+              height: 2000,
+              grid: { size: 100 },
+              "background.src": result.path,
+              ownership: { default: 0 },
+            });
+            await _createDmNotesJournal(s);
+            ui.notifications.info(`Scene "${s.name}" created with map!`);
+          }
+          btn.text("✅ Map Done!").prop("disabled", true);
+        } catch (err) {
+          console.error("DM Panic Button | Map gen error:", err);
+          btn.text("❌ Failed").prop("disabled", false);
+          ui.notifications.error("Map generation failed — is the AI server running?");
+        }
+      });
     },
   }, { width: 580 });
   d.render(true);
 }
 
-async function _createSceneFromPrep(sceneData) {
+async function _createDmNotesJournal(sceneData) {
   const hookRows = (sceneData.partyHooks || []).map(h =>
     `<li style="color:#ccc0a0;font-size:1.2em;line-height:1.8"><strong style="color:#88c088">${h.character}:</strong> ${h.hook}</li>`
   ).join("");
@@ -2969,6 +3024,14 @@ async function _createSceneFromPrep(sceneData) {
     ${hookRows ? `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">🎭 Party Hooks</h2><ul>${hookRows}</ul>` : ""}
     ${adlibRows ? `<h2 style="color:#c9a84c;border-bottom:1px solid #5a3e1b">💡 Ad-lib Ideas</h2><ul>${adlibRows}</ul>` : ""}`;
 
+  await JournalEntry.create({
+    name: `${sceneData.name} — DM Notes`,
+    ownership: { default: 0 },
+    pages: [{ name: sceneData.name, type: "text", text: { content: pageHtml, format: 1 } }],
+  });
+}
+
+async function _createSceneFromPrep(sceneData) {
   await Scene.create({
     name: sceneData.name,
     width: 2800,
@@ -2976,12 +3039,7 @@ async function _createSceneFromPrep(sceneData) {
     grid: { size: 100 },
     ownership: { default: 0 },
   });
-
-  await JournalEntry.create({
-    name: `${sceneData.name} — DM Notes`,
-    ownership: { default: 0 },
-    pages: [{ name: sceneData.name, type: "text", text: { content: pageHtml, format: 1 } }],
-  });
+  await _createDmNotesJournal(sceneData);
 }
 
 // ── Settings ─────────────────────────────────────
