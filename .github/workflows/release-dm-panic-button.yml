@@ -34,6 +34,21 @@ jobs:
             --exclude "*.DS_Store" \
             --exclude "dm-panic-button/ai-server/*"
 
+      - name: Commit updated module.json to main
+        run: |
+          cp modules/dm-panic-button/module.json /tmp/dm-panic-button-module.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -f main
+
+          cp /tmp/dm-panic-button-module.json modules/dm-panic-button/module.json
+
+          git add modules/dm-panic-button/module.json
+          git diff --cached --quiet || git commit -m "chore: update dm-panic-button module.json for v${{ steps.version.outputs.VERSION }}"
+          git push origin main
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
