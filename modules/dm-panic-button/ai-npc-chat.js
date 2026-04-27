@@ -121,6 +121,13 @@ Hooks.on("createChatMessage", async (message) => {
       whisper: whisper ? ChatMessage.getWhisperRecipients("GM") : [],
     });
 
+    // Pop a speech bubble on the attacking token
+    const tokenId = message.speaker?.token;
+    const canvasToken = canvas.tokens?.get(tokenId);
+    if (canvasToken) {
+      canvas.hud.bubbles.say(canvasToken, text);
+    }
+
   } catch (err) {
     console.error("DM Panic Button | AI chatbot error:", err);
   }

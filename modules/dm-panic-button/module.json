@@ -2,7 +2,7 @@
   "id": "dm-panic-button",
   "title": "DM Panic Button",
   "description": "Fast lookup and creation command palette",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "authors": [
     {
       "name": "Flavien Gascard",
@@ -13,7 +13,7 @@
   "readme": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/blob/main/modules/dm-panic-button/README.md",
   "bugs": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/issues",
   "manifest": "https://raw.githubusercontent.com/Flavien-Gascard/foundry-modules-and-macro/main/modules/dm-panic-button/module.json",
-  "download": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/releases/download/dm-panic-button-v0.1.0/dm-panic-button.zip",
+  "download": "https://github.com/Flavien-Gascard/foundry-modules-and-macro/releases/download/dm-panic-button-v0.4.0/dm-panic-button.zip",
   "compatibility": {
     "minimum": "13",
     "verified": "13"
